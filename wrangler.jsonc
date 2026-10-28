@@ -1,0 +1,10 @@
+{
+  // Cloudflare Workers 靜態資產部署設定：把 Vite 建置結果 dist/ 當成網站發佈
+  "name": "sen-web",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    // 純前端單頁應用：找不到檔案時回傳 index.html（本專案用 HashRouter，此項為保險）
+    "not_found_handling": "single-page-application"
+  }
+}

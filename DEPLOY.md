@@ -5,7 +5,7 @@
 
 ## 一、前置：程式碼要在 GitHub 上
 
-1. 程式碼放在獨立的 GitHub 私有 repository（`Tiebob/sen-web`），本資料夾內容位於 repository 最上層。
+1. 程式碼放在獨立的 GitHub 私有 repository（`taboobh/sen-web`），本資料夾內容位於 repository 最上層。
 2. 本資料夾已含：`.node-version`（Node 22）、`public/_headers`（禁止搜尋引擎收錄）、`package-lock.json`。
 
 ## 二、建立 Pages 專案
