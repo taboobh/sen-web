@@ -101,6 +101,15 @@ describe('授權引擎', () => {
     expect(delegableRoles(data, S('a01', 'i01')).length).toBe(data.roles.length)
     expect(delegableRoles(data, S('a03', 'i03')).map((r) => r.code)).not.toContain('NEA_ADMIN')
   })
+
+  it('縣市承辦登入後有指派角色功能：可指派縣市內角色（含學校管理員），不含署級', () => {
+    const s = S('a03', 'i03')
+    expect(authorize(data, s, 'admin:update', { scopeId: 'cityA' }).allowed).toBe(true)
+    const codes = delegableRoles(data, s).map((r) => r.code)
+    expect(codes).toEqual(expect.arrayContaining(['CITY_ADMIN', 'DISTRICT_ADMIN', 'SCHOOL_ADMIN', 'TEACHER']))
+    expect(codes).not.toContain('NEA_ADMIN')
+    expect(assignableScopes(data, s, 'SCHOOL_ADMIN').length).toBeGreaterThan(0)
+  })
 })
 
 describe('指派角色規則', () => {

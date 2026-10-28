@@ -55,7 +55,7 @@ export const ROLES: Role[] = [
     code: 'CITY_ADMIN', name: '縣市教育局處承辦', maxScope: 'CITY',
     grants: {
       students: 'CRUDAE', base: 'CRUE', identify: 'CRUAE', aide: 'CRUAE', pro: 'CRUAE', tour: 'CRUAE',
-      transport: 'R', access: 'CRUAE', material: 'CRUAE', grant: 'CRUAE', report: 'RE', news: 'CRU', admin: 'RA',
+      transport: 'R', access: 'CRUAE', material: 'CRUAE', grant: 'CRUAE', report: 'RE', news: 'CRU', admin: 'RUA',
     },
   },
   {
