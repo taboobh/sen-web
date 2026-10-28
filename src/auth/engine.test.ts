@@ -1,0 +1,74 @@
+import { describe, expect, it } from 'vitest'
+import { createRbacData } from '../mock/data'
+import { authorize, buildMePermissions, resolveSession, validateAssignment, validateDistrictAreas } from './engine'
+
+const NOW = '2026-10-28'
+const data = createRbacData()
+const S = (accountId: string, identityId: string) => {
+  const r = resolveSession(data, accountId, identityId, NOW)
+  if ('reason' in r) throw new Error(r.reason)
+  return r.session
+}
+
+describe('授權引擎', () => {
+  it('署管理員可查詢任何學校的學生', () => {
+    const d = authorize(data, S('a01', 'i01'), 'students:read', { scopeId: 'sB2' })
+    expect(d.allowed).toBe(true)
+  })
+
+  it('縣市承辦只能看本縣市，其他縣市 OUT_OF_SCOPE', () => {
+    const s = S('a03', 'i03')
+    expect(authorize(data, s, 'students:read', { scopeId: 'sA3' }).allowed).toBe(true)
+    expect(authorize(data, s, 'students:read', { scopeId: 'sB1' })).toEqual({ allowed: false, reason: 'OUT_OF_SCOPE' })
+  })
+
+  it('學校學務沒有刪除權限；有權限也不能越過本校', () => {
+    const s = S('a05', 'i05a')
+    expect(authorize(data, s, 'students:delete', { scopeId: 'sA1' })).toEqual({ allowed: false, reason: 'NO_PERMISSION' })
+    expect(authorize(data, s, 'students:read', { scopeId: 'sA4' })).toEqual({ allowed: false, reason: 'OUT_OF_SCOPE' })
+    expect(authorize(data, s, 'students:read', { scopeId: 'sA1' }).allowed).toBe(true)
+  })
+
+  it('教師只能碰有責任關係的學生', () => {
+    const s = S('a06', 'i06')
+    const mine = data.students.filter((x) => x.schoolId === 'sA1')
+    expect(authorize(data, s, 'students:read', { scopeId: 'sA1', studentId: mine[0].id }).allowed).toBe(true)
+    expect(authorize(data, s, 'students:read', { scopeId: 'sA1', studentId: mine[3].id }))
+      .toEqual({ allowed: false, reason: 'NO_RELATION' })
+  })
+
+  it('高中職鑑定中心受教育階段限制', () => {
+    const s = S('a02', 'i02')
+    expect(authorize(data, s, 'identify:approve', { scopeId: 'sA3', stage: '高中職' }).allowed).toBe(true)
+    expect(authorize(data, s, 'identify:approve', { scopeId: 'sA1', stage: '國小' }))
+      .toEqual({ allowed: false, reason: 'STAGE_MISMATCH' })
+  })
+
+  it('到期的指派與鎖定的帳號不能建立工作階段', () => {
+    expect(resolveSession(data, 'a09', 'i09', NOW)).toEqual({ reason: 'ASSIGNMENT_EXPIRED' })
+    expect(resolveSession(data, 'a10', 'i10', NOW)).toEqual({ reason: 'ACCOUNT_INACTIVE' })
+  })
+
+  it('多身分帳號可列出身分，各自使用不同角色', () => {
+    const me = buildMePermissions(data, 'a05', 'i05b', NOW)
+    if ('reason' in me) throw new Error(me.reason)
+    expect(me.identities).toHaveLength(2)
+    expect(me.active.role.code).toBe('TOUR_TEACHER')
+    expect(me.permissions).toContain('tour:create')
+    expect(me.permissions).not.toContain('students:read')
+  })
+
+  it('角色不可指派到比其最高層級更高的節點', () => {
+    const bad = { ...data.assignments[0], id: 'x', roleCode: 'SCHOOL_ADMIN', scopeId: 'nea' }
+    expect(validateAssignment(data, bad)).toMatch(/最高只能指派/)
+    expect(data.assignments.every((a) => validateAssignment(data, a) === null)).toBe(true)
+  })
+
+  it('分區由多個行政區／鄉鎮組成，且每個行政區只屬於一個分區', () => {
+    expect(validateDistrictAreas(data)).toEqual([])
+    const multi = data.areas.filter((a) => a.districtId === 'cityA-d1')
+    expect(multi.length).toBeGreaterThan(1)
+    const broken = { ...data, areas: data.areas.map((a) => (a.id === 'arA1' ? { ...a, districtId: 'cityB-d1' } : a)) }
+    expect(validateDistrictAreas(broken).length).toBeGreaterThan(0)
+  })
+})
