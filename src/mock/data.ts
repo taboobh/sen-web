@@ -16,6 +16,7 @@ export const SCOPES: ScopeNode[] = [
   sc('sA2', 'cityA-d1', 'SCHOOL', '甲市和平國中', '/nea/cityA/cityA-d1/sA2', ['國中'], 'arA2'),
   sc('sA3', 'cityA-d2', 'SCHOOL', '甲市文華高職', '/nea/cityA/cityA-d2/sA3', ['高中職'], 'arA3'),
   sc('sA4', 'cityA-d2', 'SCHOOL', '甲市青山國小', '/nea/cityA/cityA-d2/sA4', ['國小'], 'arA4'),
+  { ...sc('sN1', 'nea', 'SCHOOL', '國立示範高中（署轄）', '/nea/sN1', ['高中職']), ntaDirect: true },
   sc('cityB', 'nea', 'CITY', '乙縣教育處', '/nea/cityB'),
   sc('cityB-d1', 'cityB', 'DISTRICT', '乙縣第一分區', '/nea/cityB/cityB-d1'),
   sc('sB1', 'cityB-d1', 'SCHOOL', '乙縣海岸國小', '/nea/cityB/cityB-d1/sB1', ['國小'], 'arB1'),
@@ -97,6 +98,7 @@ export const ACCOUNTS: Account[] = [
   { id: 'a08', username: 'publisher01', name: '趙出版', email: 'a08@example.test', status: 'active' },
   { id: 'a09', username: 'sa2_admin', name: '周校管', email: 'a09@example.test', status: 'active', note: '角色指派已到期' },
   { id: 'a10', username: 'sb1_admin', name: '鄭停用', email: 'a10@example.test', status: 'locked', note: '帳號已鎖定' },
+  { id: 'a12', username: 'sn1_staff', name: '謝署轄', email: 'a12@example.test', status: 'active', note: '署轄學校新進人員，尚未指派學校管理員' },
   { id: 'a11', username: 'sa1_teacher02', name: '許新進', email: 'a11@example.test', status: 'active', note: '新進教師，尚未指派角色' },
 ]
 
@@ -112,13 +114,17 @@ export const IDENTITIES: Identity[] = [
   { id: 'i08', accountId: 'a08', orgScopeId: 'nea', jobTitle: '出版業者' },
   { id: 'i09', accountId: 'a09', orgScopeId: 'sA2', jobTitle: '特教組長' },
   { id: 'i10', accountId: 'a10', orgScopeId: 'sB1', jobTitle: '特教組長' },
+  { id: 'i12', accountId: 'a12', orgScopeId: 'sN1', jobTitle: '特教組長' },
   { id: 'i11', accountId: 'a11', orgScopeId: 'sA1', jobTitle: '特教教師' },
 ]
 
 const FROM = '2026-08-01'
 const TO = '2027-07-31'
-const ra = (id: string, identityId: string, roleCode: string, scopeId: string, stages: Stage[] = [], to = TO): RoleAssignment =>
-  ({ id, identityId, roleCode, scopeId, stages, effectiveFrom: FROM, effectiveTo: to, status: 'active' })
+/** 本職：長期有效（無期間）。兼任／借調：必須有有效期間。 */
+const ra = (id: string, identityId: string, roleCode: string, scopeId: string, stages: Stage[] = []): RoleAssignment =>
+  ({ id, identityId, roleCode, scopeId, stages, concurrent: false, effectiveFrom: null, effectiveTo: null, status: 'active' })
+const rc = (id: string, identityId: string, roleCode: string, scopeId: string, stages: Stage[] = [], to = TO): RoleAssignment =>
+  ({ id, identityId, roleCode, scopeId, stages, concurrent: true, effectiveFrom: FROM, effectiveTo: to, status: 'active' })
 
 export const ASSIGNMENTS: RoleAssignment[] = [
   ra('ra01', 'i01', 'NEA_ADMIN', 'nea'),
@@ -126,11 +132,11 @@ export const ASSIGNMENTS: RoleAssignment[] = [
   ra('ra03', 'i03', 'CITY_ADMIN', 'cityA'),
   ra('ra04', 'i04', 'DISTRICT_ADMIN', 'cityA-d1'),
   ra('ra05a', 'i05a', 'SCHOOL_ADMIN', 'sA1', ['國小']),
-  ra('ra05b', 'i05b', 'TOUR_TEACHER', 'cityA'),
+  rc('ra05b', 'i05b', 'TOUR_TEACHER', 'cityA'),
   ra('ra06', 'i06', 'TEACHER', 'sA1', ['國小']),
   ra('ra07', 'i07', 'AIDE', 'sA1', ['國小']),
   ra('ra08', 'i08', 'PUBLISHER', 'nea'),
-  ra('ra09', 'i09', 'SCHOOL_ADMIN', 'sA2', ['國中'], '2026-06-30'),
+  rc('ra09', 'i09', 'SCHOOL_ADMIN', 'sA2', ['國中'], '2026-06-30'),
   ra('ra10', 'i10', 'SCHOOL_ADMIN', 'sB1', ['國小']),
 ]
 

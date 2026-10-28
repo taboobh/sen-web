@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createRbacData } from '../mock/data'
-import { authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAccounts, validateAssignment, validateDistrictAreas, validateUsername } from './engine'
+import { assignableScopes, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAccounts, validateAssignment, validateDistrictAreas, validateUsername } from './engine'
 
 const NOW = '2026-10-28'
 const data = createRbacData()
@@ -92,7 +92,7 @@ describe('授權引擎', () => {
     expect(mine).not.toContain('a10')
     expect(mine).not.toContain('a03')
     const codes = delegableRoles(data, s).map((r) => r.code).sort()
-    expect(codes).toEqual(['AIDE', 'SCHOOL_ADMIN', 'TEACHER'])
+    expect(codes).toEqual(['AIDE', 'TEACHER'])  // 學校管理員不能指派學校管理員
     expect(authorize(data, s, 'admin:update', { scopeId: 'sA1' }).allowed).toBe(true)
     expect(authorize(data, s, 'admin:update', { scopeId: 'sA4' })).toEqual({ allowed: false, reason: 'OUT_OF_SCOPE' })
   })
@@ -100,5 +100,31 @@ describe('授權引擎', () => {
   it('署管理員可指派所有角色；縣市承辦層級角色不含署級', () => {
     expect(delegableRoles(data, S('a01', 'i01')).length).toBe(data.roles.length)
     expect(delegableRoles(data, S('a03', 'i03')).map((r) => r.code)).not.toContain('NEA_ADMIN')
+  })
+})
+
+describe('指派角色規則', () => {
+  it('署轄學校的學校管理員只有署管理員能指派；其他學校只有縣市管理員能指派', () => {
+    const nea = S('a01', 'i01'), city = S('a03', 'i03'), school = S('a05', 'i05a')
+    expect(assignableScopes(data, nea, 'SCHOOL_ADMIN').map((x) => x.id)).toEqual(['sN1'])
+    expect(assignableScopes(data, city, 'SCHOOL_ADMIN').map((x) => x.id).sort()).toEqual(['sA1', 'sA2', 'sA3', 'sA4'])
+    expect(assignmentDenial(data, nea, 'SCHOOL_ADMIN', 'sA1')).toBe('SCHOOL_ADMIN_RULE')
+    expect(assignmentDenial(data, city, 'SCHOOL_ADMIN', 'sN1')).toBe('SCHOOL_ADMIN_RULE')
+    expect(assignmentDenial(data, school, 'SCHOOL_ADMIN', 'sA1')).toBe('SCHOOL_ADMIN_RULE')
+    expect(assignmentDenial(data, city, 'SCHOOL_ADMIN', 'sA1')).toBeNull()
+  })
+
+  it('資料範圍隨角色連動：縣市承辦指派教師只能到學校層級', () => {
+    const city = S('a03', 'i03')
+    expect(assignableScopes(data, city, 'TEACHER').every((x) => x.type === 'SCHOOL')).toBe(true)
+    expect(assignableScopes(data, city, 'DISTRICT_ADMIN').map((x) => x.type)).toEqual(expect.arrayContaining(['DISTRICT']))
+  })
+
+  it('兼任／借調必須有有效期間；本職無期間且長期有效', () => {
+    const base = data.assignments.find((a) => a.id === 'ra06')!
+    expect(base.concurrent).toBe(false)
+    expect(validateAssignment(data, { ...base, concurrent: true, effectiveFrom: null, effectiveTo: null })).toMatch(/有效期間/)
+    expect(validateAssignment(data, { ...base, concurrent: true, effectiveFrom: '2026-08-01', effectiveTo: '2027-07-31' })).toBeNull()
+    expect(resolveSession(data, 'a06', 'i06', '2099-01-01')).toHaveProperty('session')
   })
 })

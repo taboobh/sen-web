@@ -12,6 +12,8 @@ export interface ScopeNode {
   stages?: Stage[]
   /** 學校所在的行政區／鄉鎮；學校屬於哪個分區由此決定 */
   areaId?: string
+  /** 署轄學校（國教署直接管轄）：學校管理員由署端管理員指派；其餘學校由縣市管理員指派 */
+  ntaDirect?: boolean
 }
 
 export interface Role {
@@ -49,8 +51,10 @@ export interface RoleAssignment {
   roleCode: string
   scopeId: string
   stages: Stage[]
-  effectiveFrom: string
-  effectiveTo: string
+  /** 兼任／借調：勾選才需要有效期間；未勾選（本職）為長期有效，期間為 null */
+  concurrent: boolean
+  effectiveFrom: string | null
+  effectiveTo: string | null
   status: 'active' | 'revoked'
 }
 
@@ -109,6 +113,7 @@ export type ReasonCode =
   | 'STAGE_MISMATCH'
   | 'NO_RELATION'
   | 'ROLE_NOT_DELEGABLE'
+  | 'SCHOOL_ADMIN_RULE'
 
 export interface Decision { allowed: boolean; reason: ReasonCode }
 
@@ -128,7 +133,7 @@ export interface MePermissions {
     role: { code: string; name: string }
     scope: { type: ScopeType; id: string; name: string }
     stages: Stage[]
-    expiresAt: string
+    expiresAt: string | null
     relationLimited: boolean
   }
   permissions: string[]

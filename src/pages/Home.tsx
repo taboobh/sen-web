@@ -18,7 +18,7 @@ export default function Home() {
         {me.active.role.name}・{me.active.scope.name}
       </Typography.Title>
       <Typography.Paragraph type="secondary">
-        只顯示此角色有權限的模組（共 {mods.length} / {MODULES.length}）。指派到期日：{me.active.expiresAt}
+        只顯示此角色有權限的模組（共 {mods.length} / {MODULES.length}）。{me.active.expiresAt ? `兼任／借調，到期日：${me.active.expiresAt}` : '本職，長期有效'}
       </Typography.Paragraph>
       {mods.length === 0 ? <Empty description="此身分沒有任何可用模組" /> : (
         <Row gutter={[12, 12]}>

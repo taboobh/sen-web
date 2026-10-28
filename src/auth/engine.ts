@@ -31,6 +31,7 @@ export function validateAssignment(data: RbacData, a: RoleAssignment): string | 
   const role = data.roles.find((r) => r.code === a.roleCode)
   const scope = data.scopes.find((s) => s.id === a.scopeId)
   if (!role || !scope) return '角色或範圍不存在'
+  if (a.concurrent && (!a.effectiveFrom || !a.effectiveTo)) return '兼任／借調必須填寫有效期間'
   if (RANK[scope.type] < RANK[role.maxScope]) {
     return `「${role.name}」最高只能指派到 ${role.maxScope} 層，不可指派到 ${scope.type}`
   }
@@ -51,7 +52,7 @@ export function validateDistrictAreas(data: RbacData): string[] {
   for (const d of data.scopes.filter((s) => s.type === 'DISTRICT')) {
     if (!data.areas.some((a) => a.districtId === d.id)) problems.push(`${d.name} 沒有任何行政區／鄉鎮`)
   }
-  for (const s of data.scopes.filter((x) => x.type === 'SCHOOL')) {
+  for (const s of data.scopes.filter((x) => x.type === 'SCHOOL' && !x.ntaDirect)) {
     const a = data.areas.find((x) => x.id === s.areaId)
     if (!a) problems.push(`${s.name} 未指定行政區／鄉鎮`)
     else if (a.districtId !== s.parentId) problems.push(`${s.name} 的行政區不屬於其上層分區`)
@@ -92,14 +93,48 @@ export function inSessionScope(data: RbacData, s: ResolvedSession, scopeId: stri
   return scopeContains(data.scopes, s.assignment.scopeId, scopeId)
 }
 
-export function delegableRoles(data: RbacData, s: ResolvedSession): Role[] {
+function delegableByLevel(data: RbacData, s: ResolvedSession): Role[] {
   const mine = data.scopes.find((x) => x.id === s.assignment.scopeId)
   if (!mine) return []
   return data.roles.filter((r) => RANK[r.maxScope] >= RANK[mine.type])
 }
 
+/**
+ * 學校管理員的指派權責：署轄學校由署端管理員（NEA_ADMIN）指派；其餘學校由縣市管理員（CITY_ADMIN）指派，
+ * 且該校須在其縣市之內。學校管理員不能再指派學校管理員。
+ */
+function schoolAdminAllowed(data: RbacData, s: ResolvedSession, school: ScopeNode): boolean {
+  if (school.type !== 'SCHOOL') return false
+  if (school.ntaDirect) return s.role.code === 'NEA_ADMIN'
+  return s.role.code === 'CITY_ADMIN' && scopeContains(data.scopes, s.assignment.scopeId, school.id)
+}
+
+/** 指派畫面「資料範圍」選項：隨角色連動（層級不得高於角色最高層級、須在自己範圍內、學校管理員另有權責規則） */
+export function assignableScopes(data: RbacData, s: ResolvedSession, roleCode: string): ScopeNode[] {
+  const role = data.roles.find((r) => r.code === roleCode)
+  if (!role || !delegableByLevel(data, s).some((r) => r.code === roleCode)) return []
+  return data.scopes.filter((x) =>
+    inSessionScope(data, s, x.id) && RANK[x.type] >= RANK[role.maxScope] &&
+    (roleCode !== 'SCHOOL_ADMIN' || schoolAdminAllowed(data, s, x)))
+}
+
+/** 可指派的角色＝至少有一個可指派的資料範圍 */
+export function delegableRoles(data: RbacData, s: ResolvedSession): Role[] {
+  return delegableByLevel(data, s).filter((r) => assignableScopes(data, s, r.code).length > 0)
+}
+
+/** 指派的最終檢查（後端用）：回傳拒絕原因或 null */
+export function assignmentDenial(data: RbacData, s: ResolvedSession, roleCode: string, scopeId: string): ReasonCode | null {
+  if (!delegableByLevel(data, s).some((r) => r.code === roleCode)) return 'ROLE_NOT_DELEGABLE'
+  if (roleCode === 'SCHOOL_ADMIN') {
+    const sc = data.scopes.find((x) => x.id === scopeId)
+    if (sc && sc.type === 'SCHOOL' && !schoolAdminAllowed(data, s, sc)) return 'SCHOOL_ADMIN_RULE'
+  }
+  return null
+}
+
 export function isWithinPeriod(a: RoleAssignment, now: string): boolean {
-  return a.status === 'active' && a.effectiveFrom <= now && now <= a.effectiveTo
+  return a.status === 'active' && (!a.effectiveFrom || a.effectiveFrom <= now) && (!a.effectiveTo || now <= a.effectiveTo)
 }
 
 /** 身分目前可用的角色指派（第一筆有效者），沒有則回傳原因 */
@@ -186,4 +221,5 @@ export const REASON_TEXT: Record<ReasonCode, string> = {
   STAGE_MISMATCH: '目標資料的教育階段不在指派範圍內',
   NO_RELATION: '與該學生沒有責任關係',
   ROLE_NOT_DELEGABLE: '此角色層級高於您的角色，不可由您指派',
+  SCHOOL_ADMIN_RULE: '學校管理員：署轄學校由署端管理員指派，其餘學校由縣市管理員指派',
 }

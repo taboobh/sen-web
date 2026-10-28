@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, Button, Card, Popconfirm, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Popconfirm, Space, Tag, Tooltip, Typography, message } from 'antd'
+import DataTable from '../components/DataTable'
 import { api, ApiError } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import type { Student } from '../types'
@@ -34,9 +35,6 @@ export default function StudentTable() {
         <Tooltip title={can('students', 'create') ? '' : '目前角色沒有新增權限'}>
           <Button type="primary" disabled={!can('students', 'create')} onClick={() => run(() => api('/students', { method: 'POST', json: {} }), '已新增（僅存於記憶體）')}>新增</Button>
         </Tooltip>
-        <Tooltip title={can('students', 'export') ? '' : '目前角色沒有匯出權限'}>
-          <Button disabled={!can('students', 'export')} onClick={() => msg.info('示範：匯出需另有「匯出」權限，並會寫入稽核')}>匯出</Button>
-        </Tooltip>
       </Space>
     }>
       {ctx}
@@ -46,18 +44,18 @@ export default function StudentTable() {
         {me?.active.relationLimited && <>，僅限<b>有責任關係</b>的學生</>}。共 {rows.length} 筆。
       </Typography.Paragraph>
       {err && <Alert type="error" showIcon message={err} style={{ marginBottom: 12 }} />}
-      <Table<Row>
-        rowKey="id" size="small" loading={loading} dataSource={rows}
-        scroll={{ x: 640 }}
-        pagination={{ pageSize: 10, hideOnSinglePage: true }}
+      <DataTable<Row>
+        rows={rows} rowKey={(r) => r.id} loading={loading} exportName="身障資優學生資料" scrollX={720}
+        canExport={can('students', 'export')} exportTip="目前角色沒有匯出權限"
+        onExport={(n) => msg.info(`已匯出 ${n} 筆（匯出需有「匯出」權限，正式版會寫入稽核）`)}
         columns={[
-          { title: '姓名', dataIndex: 'name' },
-          { title: '學校', dataIndex: 'schoolName' },
-          { title: '教育階段', dataIndex: 'stage', render: (v: string) => <Tag>{v}</Tag> },
-          { title: '年級', dataIndex: 'grade' },
-          { title: '障礙類別', dataIndex: 'category' },
+          { key: 'name', title: '姓名', value: (r) => r.name },
+          { key: 'school', title: '學校', value: (r) => r.schoolName },
+          { key: 'stage', title: '教育階段', value: (r) => r.stage, render: (r) => <Tag>{r.stage}</Tag> },
+          { key: 'grade', title: '年級', value: (r) => r.grade },
+          { key: 'category', title: '障礙類別', value: (r) => r.category },
           {
-            title: '操作', render: (_: unknown, r) => (
+            key: 'op', title: '操作', value: () => '', noExport: true, filter: false, render: (r) => (
               <Space>
                 <Button size="small" disabled={!can('students', 'update')}>修改</Button>
                 <Popconfirm title="確定刪除？" disabled={!can('students', 'delete')} onConfirm={() => run(() => api(`/students/${r.id}`, { method: 'DELETE' }), '已刪除')}>

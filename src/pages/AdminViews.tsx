@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Alert, Button, Card, Form, Input, Modal, Result, Select, Spin, Table, Tag, Tree, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Form, Input, Modal, Result, Select, Spin, Tag, Tree, Typography, message } from 'antd'
+import DataTable, { type Col } from '../components/DataTable'
 import type { DataNode } from 'antd/es/tree'
 import { api, ApiError } from '../api/client'
 import { ACTION_LABEL, ACTION_LETTER, type AdminArea, type Account, type AuditEntry, type Identity, type Role, type RoleAssignment, type ScopeNode } from '../types'
@@ -10,7 +11,7 @@ type AssignmentRow = RoleAssignment & { problem: string | null }
 
 interface Overview {
   rootId: string; scopeName: string; canAssign: boolean; assignableRoles: string[]
-  roles: Role[]; scopes: ScopeNode[]; areas: AdminArea[]; areaProblems: string[]; accounts: Account[]; identities: Identity[]
+  roles: Role[]; assignableScopes: Record<string, string[]>; scopes: ScopeNode[]; areas: AdminArea[]; areaProblems: string[]; accounts: Account[]; identities: Identity[]
   assignments: AssignmentRow[]; audit: AuditEntry[]
 }
 
@@ -32,6 +33,9 @@ const today = () => new Date().toISOString().slice(0, 10)
 
 interface Row { key: string; identity: Identity; account: Account; assignment?: AssignmentRow }
 
+const periodText = (a?: AssignmentRow) => !a ? '-' : a.concurrent ? `${a.effectiveFrom} ～ ${a.effectiveTo}` : '無期限（本職）'
+const statusText = (a?: AssignmentRow) => !a ? '待指派' : a.problem ? a.problem : a.effectiveTo && a.effectiveTo < today() ? '已到期' : '有效'
+
 export function AccountsView() {
   const { data, err, reload } = useOverview()
   const [target, setTarget] = useState<Identity | null>(null)
@@ -44,30 +48,33 @@ export function AccountsView() {
           ? list.map((a) => ({ key: a.id, identity: i, account, assignment: a }))
           : [{ key: i.id, identity: i, account }]
       })
+      const scopeName = (id?: string) => d.scopes.find((s) => s.id === id)?.name
+      const columns: Col<Row>[] = [
+        { key: 'username', title: '帳號', value: (r) => r.account.username, render: (r) => <Typography.Text code>{r.account.username}</Typography.Text> },
+        { key: 'name', title: '使用者姓名', value: (r) => r.account.name,
+          render: (r) => <>{r.account.name}{r.account.status !== 'active' && <Tag color="red" style={{ marginLeft: 6 }}>鎖定</Tag>}</> },
+        { key: 'identity', title: '身分', value: (r) => `${scopeName(r.identity.orgScopeId)} ${r.identity.jobTitle}` },
+        { key: 'role', title: '角色', value: (r) => r.assignment ? d.roles.find((x) => x.code === r.assignment!.roleCode)?.name : '尚未指派',
+          render: (r) => r.assignment ? <Tag color="blue">{d.roles.find((x) => x.code === r.assignment!.roleCode)?.name}</Tag> : <Tag>尚未指派</Tag> },
+        { key: 'scope', title: '資料範圍', value: (r) => r.assignment ? scopeName(r.assignment.scopeId) : '' },
+        { key: 'stages', title: '教育階段', value: (r) => r.assignment ? (r.assignment.stages.length ? r.assignment.stages.join('、') : '不限') : '' },
+        { key: 'kind', title: '任職別', value: (r) => r.assignment ? (r.assignment.concurrent ? '兼任／借調' : '本職') : '' },
+        { key: 'period', title: '有效期間', value: (r) => periodText(r.assignment) },
+        { key: 'status', title: '狀態', value: (r) => statusText(r.assignment),
+          render: (r) => !r.assignment ? <Tag color="orange">待指派</Tag>
+            : r.assignment.problem ? <Tag color="red">{r.assignment.problem}</Tag>
+              : statusText(r.assignment) === '已到期' ? <Tag color="orange">已到期</Tag> : <Tag color="green">有效</Tag> },
+        ...(d.canAssign ? [{ key: 'op', title: '操作', value: () => '', noExport: true, filter: false, fixed: 'right' as const, width: 100,
+          render: (r: Row) => <Button size="small" type="link" onClick={() => setTarget(r.identity)}>指派角色</Button> }] : []),
+      ]
       return (
         <Card title={`帳號與角色指派（${d.scopeName}）`}>
           <Alert type="info" showIcon style={{ marginBottom: 12 }}
             message={`您目前的資料範圍是「${d.scopeName}」，只能瀏覽此範圍內的使用者與角色指派${d.canAssign ? '，並可在範圍內指派角色' : ''}。`} />
           <Typography.Paragraph type="secondary">
-            「帳號」是登入用的英文代號；「使用者姓名」是本人姓名。一個帳號可有多個身分；每個身分有「角色＋資料範圍＋教育階段＋有效期間」的指派。
+            「帳號」是登入用的英文代號；「使用者姓名」是本人姓名。一個帳號可有多個身分；每個身分有「角色＋資料範圍＋教育階段」的指派，兼任／借調另有有效期間。
           </Typography.Paragraph>
-          <Table<Row> size="small" rowKey="key" scroll={{ x: 1100 }} pagination={false} dataSource={rows}
-            columns={[
-              { title: '帳號', render: (_: unknown, r: Row) => <Typography.Text code>{r.account.username}</Typography.Text> },
-              { title: '使用者姓名', render: (_: unknown, r: Row) => <>{r.account.name}{r.account.status !== 'active' && <Tag color="red" style={{ marginLeft: 6 }}>鎖定</Tag>}</> },
-              { title: '身分', render: (_: unknown, r: Row) => `${d.scopes.find((s) => s.id === r.identity.orgScopeId)?.name} ${r.identity.jobTitle}` },
-              { title: '角色', render: (_: unknown, r: Row) => r.assignment
-                ? <Tag color="blue">{d.roles.find((x) => x.code === r.assignment!.roleCode)?.name}</Tag> : <Tag>尚未指派</Tag> },
-              { title: '資料範圍', render: (_: unknown, r: Row) => r.assignment ? d.scopes.find((s) => s.id === r.assignment!.scopeId)?.name : '-' },
-              { title: '教育階段', render: (_: unknown, r: Row) => r.assignment ? (r.assignment.stages.length ? r.assignment.stages.join('、') : '不限') : '-' },
-              { title: '有效期間', render: (_: unknown, r: Row) => r.assignment ? `${r.assignment.effectiveFrom} ～ ${r.assignment.effectiveTo}` : '-' },
-              { title: '狀態', render: (_: unknown, r: Row) => !r.assignment ? <Tag color="orange">待指派</Tag>
-                : r.assignment.problem ? <Tag color="red">{r.assignment.problem}</Tag>
-                  : r.assignment.effectiveTo < today() ? <Tag color="orange">已到期</Tag> : <Tag color="green">有效</Tag> },
-              ...(d.canAssign ? [{ title: '操作', fixed: 'right' as const, render: (_: unknown, r: Row) =>
-                <Button size="small" type="link" onClick={() => setTarget(r.identity)}>指派角色</Button> }] : []),
-            ]}
-          />
+          <DataTable<Row> rows={rows} columns={columns} rowKey={(r) => r.key} exportName="帳號與角色指派" scrollX={1300} />
           <AssignModal d={d} identity={target} onClose={() => setTarget(null)} onDone={() => { setTarget(null); reload() }} />
         </Card>
       )
@@ -81,14 +88,24 @@ function AssignModal({ d, identity, onClose, onDone }: { d: Overview; identity: 
   const [msg, ctx] = message.useMessage()
   const account = d.accounts.find((a) => a.id === identity?.accountId)
   const roles = d.roles.filter((r) => d.assignableRoles.includes(r.code))
+  const roleCode: string | undefined = Form.useWatch('roleCode', form)
   const scopeId: string | undefined = Form.useWatch('scopeId', form)
+  const concurrent: boolean = Form.useWatch('concurrent', form) ?? false
+  // 資料範圍隨角色連動：只列出該角色可指派、且自己有權指派的節點
+  const scopeOptions = (roleCode ? d.assignableScopes[roleCode] ?? [] : []).map((id) => d.scopes.find((s) => s.id === id)!).filter(Boolean)
   const stageOptions = d.scopes.find((s) => s.id === scopeId)?.stages ?? ['學前', '國小', '國中', '高中職', '大專']
+
+  const onRoleChange = (code: string) => {
+    const ok = (d.assignableScopes[code] ?? [])
+    const keep = ok.includes(scopeId ?? '') ? scopeId : ok.includes(identity?.orgScopeId ?? '') ? identity?.orgScopeId : ok.length === 1 ? ok[0] : undefined
+    form.setFieldsValue({ scopeId: keep, stages: undefined })
+  }
 
   const submit = async () => {
     const v = await form.validateFields()
     setSaving(true)
     try {
-      await api('/admin/assignments', { method: 'POST', json: { identityId: identity!.id, roleCode: v.roleCode, scopeId: v.scopeId, stages: v.stages ?? [], effectiveFrom: v.from, effectiveTo: v.to } })
+      await api('/admin/assignments', { method: 'POST', json: { identityId: identity!.id, roleCode: v.roleCode, scopeId: v.scopeId, stages: v.stages ?? [], concurrent: !!v.concurrent, effectiveFrom: v.concurrent ? v.from : null, effectiveTo: v.concurrent ? v.to : null } })
       msg.success('已指派角色'); onDone()
     } catch (e) { msg.error(e instanceof ApiError ? e.message : '指派失敗') } finally { setSaving(false) }
   }
@@ -97,23 +114,32 @@ function AssignModal({ d, identity, onClose, onDone }: { d: Overview; identity: 
     <Modal open={!!identity} title={`指派角色：${account?.name ?? ''}（${account?.username ?? ''}）`} okText="指派" cancelText="取消"
       confirmLoading={saving} onOk={() => { void submit() }} onCancel={onClose} destroyOnClose afterOpenChange={(o) => { if (o) form.resetFields() }}>
       {ctx}
-      <Typography.Paragraph type="secondary">只列出您有權限指派的角色與資料範圍；後端會再檢查一次。</Typography.Paragraph>
-      <Form form={form} layout="vertical" initialValues={{ scopeId: identity?.orgScopeId, from: '2026-08-01', to: '2027-07-31' }}>
+      <Typography.Paragraph type="secondary">
+        只列出您有權限指派的角色；「資料範圍」會隨所選角色連動。學校管理員：署轄學校由署端管理員指派，其餘學校由縣市管理員指派。後端會再檢查一次。
+      </Typography.Paragraph>
+      <Form form={form} layout="vertical" initialValues={{ concurrent: false }}>
         <Form.Item name="roleCode" label="角色" rules={[{ required: true, message: '請選擇角色' }]}>
-          <Select options={roles.map((r) => ({ value: r.code, label: r.name }))} placeholder="選擇角色" />
+          <Select options={roles.map((r) => ({ value: r.code, label: r.name }))} placeholder="選擇角色" onChange={onRoleChange} />
         </Form.Item>
-        <Form.Item name="scopeId" label="資料範圍" rules={[{ required: true, message: '請選擇資料範圍' }]}>
-          <Select options={d.scopes.map((s) => ({ value: s.id, label: s.name }))} />
+        <Form.Item name="scopeId" label="資料範圍" rules={[{ required: true, message: '請選擇資料範圍' }]}
+          extra={roleCode ? `此角色可指派的範圍：${scopeOptions.length} 個` : '請先選擇角色'}>
+          <Select disabled={!roleCode} showSearch optionFilterProp="label" placeholder={roleCode ? '選擇資料範圍' : '請先選擇角色'}
+            options={scopeOptions.map((s) => ({ value: s.id, label: s.ntaDirect ? `${s.name}` : s.name }))} />
         </Form.Item>
         <Form.Item name="stages" label="教育階段（不選＝不限）">
           <Select mode="multiple" allowClear options={stageOptions.map((x) => ({ value: x, label: x }))} />
         </Form.Item>
-        <Form.Item label="有效期間" required style={{ marginBottom: 0 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Form.Item name="from" rules={[{ required: true, message: '請輸入起日' }]} style={{ flex: 1 }}><Input type="date" aria-label="起日" /></Form.Item>
-            <Form.Item name="to" rules={[{ required: true, message: '請輸入迄日' }]} style={{ flex: 1 }}><Input type="date" aria-label="迄日" /></Form.Item>
-          </div>
+        <Form.Item name="concurrent" valuePropName="checked" style={{ marginBottom: concurrent ? 12 : 0 }}>
+          <Checkbox>兼任／借調（勾選才需填寫有效期間；未勾選為本職，長期有效）</Checkbox>
         </Form.Item>
+        {concurrent && (
+          <Form.Item label="有效期間" required style={{ marginBottom: 0 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Form.Item name="from" rules={[{ required: true, message: '請輸入起日' }]} style={{ flex: 1 }}><Input type="date" aria-label="起日" /></Form.Item>
+              <Form.Item name="to" rules={[{ required: true, message: '請輸入迄日' }]} style={{ flex: 1 }}><Input type="date" aria-label="迄日" /></Form.Item>
+            </div>
+          </Form.Item>
+        )}
       </Form>
     </Modal>
   )
@@ -137,14 +163,15 @@ export function RoleMatrixView() {
             <Typography.Paragraph type="secondary">
               {Object.entries(ACTION_LETTER).map(([k, v]) => `${k}＝${ACTION_LABEL[v]}`).join('　')}　｜　「最高層級」是角色可被指派的最高節點。
             </Typography.Paragraph>
-            <Table size="small" rowKey="id" pagination={false} scroll={{ x: 1100 }}
-              dataSource={MODULES}
+            <DataTable<{ id: string; name: string }> rows={MODULES.map((m) => ({ id: m.id, name: m.name }))} rowKey={(m) => m.id} exportName="角色模組動作矩陣"
+              pagination={false} scrollX={1100}
               columns={[
-                { title: '模組', dataIndex: 'name', fixed: 'left', width: 140 },
-                ...d.roles.map((r) => ({
-                  title: <>{r.name}<br /><Typography.Text type="secondary" style={{ fontSize: 11 }}>最高：{r.maxScope}{r.relationLimited ? '・關係' : ''}</Typography.Text></>,
-                  key: r.code,
-                  render: (_: unknown, m: { id: string }) => r.grants[m.id] ? <Tag color="blue">{r.grants[m.id]}</Tag> : <span style={{ color: '#ccc' }}>—</span>,
+                { key: 'module', title: '模組', value: (m) => m.name, fixed: 'left', width: 140 },
+                ...d.roles.map((r): Col<{ id: string; name: string }> => ({
+                  key: r.code, title: r.name,
+                  titleNode: <>{r.name}<br /><Typography.Text type="secondary" style={{ fontSize: 11 }}>最高：{r.maxScope}{r.relationLimited ? '・關係' : ''}</Typography.Text></>,
+                  value: (m) => r.grants[m.id] ?? '',
+                  render: (m) => r.grants[m.id] ? <Tag color="blue">{r.grants[m.id]}</Tag> : <span style={{ color: '#ccc' }}>—</span>,
                 })),
               ]}
             />
@@ -165,15 +192,16 @@ export function AuditView() {
     <Gate data={data} err={err}>{(d) => (
       <Card title={`授權稽核紀錄（${d.scopeName}，本次瀏覽期間）`}>
         <Alert type="info" showIcon style={{ marginBottom: 12 }} message="每次授權決定（允許或拒絕）都會寫入稽核；示範僅存於記憶體，重新整理即清空。" />
-        <Table size="small" rowKey="id" scroll={{ x: 800 }} dataSource={d.audit}
+        <DataTable<AuditEntry> rows={d.audit} rowKey={(e) => String(e.id)} exportName="授權稽核紀錄" scrollX={900}
           columns={[
-            { title: '時間', dataIndex: 'at' },
-            { title: '使用者姓名', dataIndex: 'accountName' },
-            { title: '角色', dataIndex: 'roleName' },
-            { title: '權限', dataIndex: 'permission' },
-            { title: '目標', dataIndex: 'target' },
-            { title: '結果', dataIndex: 'decision', render: (v: string) => <Tag color={v === 'ALLOW' ? 'green' : 'red'}>{v === 'ALLOW' ? '允許' : '拒絕'}</Tag> },
-            { title: '原因', dataIndex: 'reason', render: (v: keyof typeof REASON_TEXT) => REASON_TEXT[v] },
+            { key: 'at', title: '時間', value: (e) => e.at },
+            { key: 'accountName', title: '使用者姓名', value: (e) => e.accountName },
+            { key: 'roleName', title: '角色', value: (e) => e.roleName },
+            { key: 'permission', title: '權限', value: (e) => e.permission },
+            { key: 'target', title: '目標', value: (e) => e.target },
+            { key: 'decision', title: '結果', value: (e) => e.decision === 'ALLOW' ? '允許' : '拒絕',
+              render: (e) => <Tag color={e.decision === 'ALLOW' ? 'green' : 'red'}>{e.decision === 'ALLOW' ? '允許' : '拒絕'}</Tag> },
+            { key: 'reason', title: '原因', value: (e) => REASON_TEXT[e.reason] },
           ]}
         />
       </Card>

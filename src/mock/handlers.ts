@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import type { AuthTarget, ReasonCode, Stage } from '../types'
-import { REASON_TEXT, authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAssignment, validateDistrictAreas } from '../auth/engine'
+import { REASON_TEXT, assignableScopes, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAssignment, validateDistrictAreas } from '../auth/engine'
 import { audit, db, logAudit } from './state'
 
 /**
@@ -152,6 +152,10 @@ export const handlers = [
       assignments: assignments.map((a) => ({ ...a, problem: validateAssignment(db, a) })),
       canAssign,
       assignableRoles: canAssign ? delegableRoles(db, session).map((x) => x.code) : [],
+      // 角色 → 可選的資料範圍（指派畫面的「資料範圍」隨角色連動）
+      assignableScopes: canAssign
+        ? Object.fromEntries(delegableRoles(db, session).map((x) => [x.code, assignableScopes(db, session, x.code).map((sc) => sc.id)]))
+        : {},
       audit: audit.filter((e) => e.scopeId && inMine(e.scopeId)),
     })
   }),
@@ -163,7 +167,7 @@ export const handlers = [
     const r = resolveSession(db, s.accountId, s.identityId, today())
     if ('reason' in r) return unauthorized(r.reason)
     const { session } = r
-    const body = (await request.json()) as { identityId: string; roleCode: string; scopeId: string; stages?: string[]; effectiveFrom: string; effectiveTo: string }
+    const body = (await request.json()) as { identityId: string; roleCode: string; scopeId: string; stages?: string[]; concurrent?: boolean; effectiveFrom?: string | null; effectiveTo?: string | null }
     const identity = db.identities.find((i) => i.id === body.identityId)
     const role = db.roles.find((x) => x.code === body.roleCode)
     const scope = db.scopes.find((x) => x.id === body.scopeId)
@@ -177,14 +181,17 @@ export const handlers = [
       ? authorize(db, session, 'admin:update', { scopeId: scope.id })
       : { allowed: false, reason: 'OUT_OF_SCOPE' as ReasonCode }
     if (!gate.allowed) { log('DENY', gate.reason); return forbidden(gate.reason) }
-    if (!delegableRoles(db, session).some((x) => x.code === role.code)) { log('DENY', 'ROLE_NOT_DELEGABLE'); return forbidden('ROLE_NOT_DELEGABLE') }
+    const denied = assignmentDenial(db, session, role.code, scope.id)
+    if (denied) { log('DENY', denied); return forbidden(denied) }
     const stages = (body.stages ?? []) as Stage[]
-    const draft = { id: `ra${String(db.assignments.length + 1).padStart(2, '0')}x`, identityId: identity.id, roleCode: role.code, scopeId: scope.id, stages, effectiveFrom: body.effectiveFrom, effectiveTo: body.effectiveTo, status: 'active' as const }
+    // 兼任／借調才需要有效期間；本職為長期有效
+    const concurrent = !!body.concurrent
+    const draft = { id: `ra${String(db.assignments.length + 1).padStart(2, '0')}x`, identityId: identity.id, roleCode: role.code, scopeId: scope.id, stages, concurrent, effectiveFrom: concurrent ? body.effectiveFrom ?? null : null, effectiveTo: concurrent ? body.effectiveTo ?? null : null, status: 'active' as const }
     const problem = validateAssignment(db, draft)
     if (problem) return bad(problem)
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveTo) || draft.effectiveFrom > draft.effectiveTo) return bad('有效期間不正確')
+    if (concurrent && (!draft.effectiveFrom || !draft.effectiveTo || !/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveTo) || draft.effectiveFrom > draft.effectiveTo)) return bad('兼任／借調必須填寫正確的有效期間')
     if (scope.stages && stages.some((x) => !scope.stages!.includes(x))) return bad('教育階段不在該學校的教育階段內')
-    if (db.assignments.some((a) => a.identityId === identity.id && a.roleCode === role.code && a.scopeId === scope.id && a.status === 'active' && a.effectiveTo >= draft.effectiveFrom && a.effectiveFrom <= draft.effectiveTo)) return bad('此身分在該範圍已有相同角色且期間重疊')
+    if (db.assignments.some((a) => a.identityId === identity.id && a.roleCode === role.code && a.scopeId === scope.id && a.status === 'active' && (a.effectiveTo ?? '9999-12-31') >= (draft.effectiveFrom ?? '0000-01-01') && (a.effectiveFrom ?? '0000-01-01') <= (draft.effectiveTo ?? '9999-12-31'))) return bad('此身分在該範圍已有相同角色且期間重疊')
     db.assignments.push(draft)
     log('ALLOW', 'OK')
     return HttpResponse.json(draft, { status: 201 })
