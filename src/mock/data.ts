@@ -62,10 +62,10 @@ export const ROLES: Role[] = [
     grants: { students: 'R', base: 'RU', identify: 'R', pro: 'RA', report: 'R', news: 'R', admin: 'R' },
   },
   {
-    code: 'SCHOOL_ADMIN', name: '學校學務', maxScope: 'SCHOOL',
+    code: 'SCHOOL_ADMIN', name: '學校管理員', maxScope: 'SCHOOL',
     grants: {
       students: 'CRUE', base: 'CRU', identify: 'CRU', aide: 'CRU', pro: 'CR', tour: 'CR', transport: 'CRU',
-      material: 'CRU', grant: 'CR', report: 'R', news: 'R', admin: 'CR',
+      material: 'CRU', grant: 'CR', report: 'R', news: 'R', admin: 'CRU',
     },
   },
   {
@@ -87,16 +87,17 @@ export const ROLES: Role[] = [
 ]
 
 export const ACCOUNTS: Account[] = [
-  { id: 'a01', name: '王署管', email: 'a01@example.test', status: 'active' },
-  { id: 'a02', name: '林鑑定', email: 'a02@example.test', status: 'active' },
-  { id: 'a03', name: '陳局處', email: 'a03@example.test', status: 'active' },
-  { id: 'a04', name: '黃分區', email: 'a04@example.test', status: 'active' },
-  { id: 'a05', name: '張組長', email: 'a05@example.test', status: 'active', note: '多身分：學校學務＋巡迴輔導教師' },
-  { id: 'a06', name: '李老師', email: 'a06@example.test', status: 'active' },
-  { id: 'a07', name: '吳助理', email: 'a07@example.test', status: 'active' },
-  { id: 'a08', name: '示範出版社', email: 'a08@example.test', status: 'active' },
-  { id: 'a09', name: '周學務', email: 'a09@example.test', status: 'active', note: '角色指派已到期' },
-  { id: 'a10', name: '鄭停用', email: 'a10@example.test', status: 'locked', note: '帳號已鎖定' },
+  { id: 'a01', username: 'nea_admin', name: '王署管', email: 'a01@example.test', status: 'active' },
+  { id: 'a02', username: 'ident_center01', name: '林鑑定', email: 'a02@example.test', status: 'active' },
+  { id: 'a03', username: 'citya_staff', name: '陳局處', email: 'a03@example.test', status: 'active' },
+  { id: 'a04', username: 'citya_d1', name: '黃分區', email: 'a04@example.test', status: 'active' },
+  { id: 'a05', username: 'sa1_admin', name: '張組長', email: 'a05@example.test', status: 'active', note: '多身分：學校管理員＋巡迴輔導教師' },
+  { id: 'a06', username: 'sa1_teacher01', name: '李老師', email: 'a06@example.test', status: 'active' },
+  { id: 'a07', username: 'sa1_aide01', name: '吳助理', email: 'a07@example.test', status: 'active' },
+  { id: 'a08', username: 'publisher01', name: '趙出版', email: 'a08@example.test', status: 'active' },
+  { id: 'a09', username: 'sa2_admin', name: '周校管', email: 'a09@example.test', status: 'active', note: '角色指派已到期' },
+  { id: 'a10', username: 'sb1_admin', name: '鄭停用', email: 'a10@example.test', status: 'locked', note: '帳號已鎖定' },
+  { id: 'a11', username: 'sa1_teacher02', name: '許新進', email: 'a11@example.test', status: 'active', note: '新進教師，尚未指派角色' },
 ]
 
 export const IDENTITIES: Identity[] = [
@@ -111,6 +112,7 @@ export const IDENTITIES: Identity[] = [
   { id: 'i08', accountId: 'a08', orgScopeId: 'nea', jobTitle: '出版業者' },
   { id: 'i09', accountId: 'a09', orgScopeId: 'sA2', jobTitle: '特教組長' },
   { id: 'i10', accountId: 'a10', orgScopeId: 'sB1', jobTitle: '特教組長' },
+  { id: 'i11', accountId: 'a11', orgScopeId: 'sA1', jobTitle: '特教教師' },
 ]
 
 const FROM = '2026-08-01'

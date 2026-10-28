@@ -27,6 +27,9 @@ export interface Role {
 
 export interface Account {
   id: string
+  /** 登入帳號：英文字母、數字、_、-，且以英文字母開頭 */
+  username: string
+  /** 使用者姓名（顯示用，不是登入帳號） */
   name: string
   email: string
   status: 'active' | 'locked' | 'disabled'
@@ -105,6 +108,7 @@ export type ReasonCode =
   | 'OUT_OF_SCOPE'
   | 'STAGE_MISMATCH'
   | 'NO_RELATION'
+  | 'ROLE_NOT_DELEGABLE'
 
 export interface Decision { allowed: boolean; reason: ReasonCode }
 
@@ -139,4 +143,6 @@ export interface AuditEntry {
   target: string
   decision: 'ALLOW' | 'DENY'
   reason: ReasonCode
+  /** 操作者當時的資料範圍；稽核紀錄依此限制可瀏覽範圍 */
+  scopeId?: string
 }

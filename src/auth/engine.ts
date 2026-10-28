@@ -59,6 +59,45 @@ export function validateDistrictAreas(data: RbacData): string[] {
   return problems
 }
 
+/** 登入帳號格式：英文字母、數字、_、-；開頭必須是英文字母 */
+export const USERNAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/
+export function validateUsername(u: string): string | null {
+  if (!u) return '請輸入帳號'
+  if (!/^[A-Za-z]/.test(u)) return '帳號必須以英文字母開頭'
+  if (!USERNAME_RE.test(u)) return '帳號只能使用英文字母、數字、_、-'
+  return null
+}
+
+/** 帳號資料檢查：格式正確、不重複（不分大小寫） */
+export function validateAccounts(data: RbacData): string[] {
+  const problems: string[] = []
+  const seen = new Set<string>()
+  for (const a of data.accounts) {
+    const bad = validateUsername(a.username)
+    if (bad) problems.push(`${a.name}（${a.username || '空白'}）：${bad}`)
+    const k = a.username.toLowerCase()
+    if (seen.has(k)) problems.push(`${a.name}：帳號 ${a.username} 重複`)
+    seen.add(k)
+  }
+  return problems
+}
+
+/**
+ * 委派規則（學校管理員只能管本校）：
+ * 1. 可瀏覽的使用者＝所屬單位在自己「資料範圍」之內者；
+ * 2. 可指派的角色＝層級不高於自己的角色（角色最高層級 ≥ 自己的指派層級），例如學校管理員只能指派學校層級角色；
+ * 3. 指派的資料範圍必須在自己的資料範圍之內。
+ */
+export function inSessionScope(data: RbacData, s: ResolvedSession, scopeId: string): boolean {
+  return scopeContains(data.scopes, s.assignment.scopeId, scopeId)
+}
+
+export function delegableRoles(data: RbacData, s: ResolvedSession): Role[] {
+  const mine = data.scopes.find((x) => x.id === s.assignment.scopeId)
+  if (!mine) return []
+  return data.roles.filter((r) => RANK[r.maxScope] >= RANK[mine.type])
+}
+
 export function isWithinPeriod(a: RoleAssignment, now: string): boolean {
   return a.status === 'active' && a.effectiveFrom <= now && now <= a.effectiveTo
 }
@@ -146,4 +185,5 @@ export const REASON_TEXT: Record<ReasonCode, string> = {
   OUT_OF_SCOPE: '目標資料不在指派的資料範圍內',
   STAGE_MISMATCH: '目標資料的教育階段不在指派範圍內',
   NO_RELATION: '與該學生沒有責任關係',
+  ROLE_NOT_DELEGABLE: '此角色層級高於您的角色，不可由您指派',
 }

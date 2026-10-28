@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createRbacData } from '../mock/data'
-import { authorize, buildMePermissions, resolveSession, validateAssignment, validateDistrictAreas } from './engine'
+import { authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAccounts, validateAssignment, validateDistrictAreas, validateUsername } from './engine'
 
 const NOW = '2026-10-28'
 const data = createRbacData()
@@ -22,7 +22,7 @@ describe('授權引擎', () => {
     expect(authorize(data, s, 'students:read', { scopeId: 'sB1' })).toEqual({ allowed: false, reason: 'OUT_OF_SCOPE' })
   })
 
-  it('學校學務沒有刪除權限；有權限也不能越過本校', () => {
+  it('學校管理員沒有刪除權限；有權限也不能越過本校', () => {
     const s = S('a05', 'i05a')
     expect(authorize(data, s, 'students:delete', { scopeId: 'sA1' })).toEqual({ allowed: false, reason: 'NO_PERMISSION' })
     expect(authorize(data, s, 'students:read', { scopeId: 'sA4' })).toEqual({ allowed: false, reason: 'OUT_OF_SCOPE' })
@@ -70,5 +70,35 @@ describe('授權引擎', () => {
     expect(multi.length).toBeGreaterThan(1)
     const broken = { ...data, areas: data.areas.map((a) => (a.id === 'arA1' ? { ...a, districtId: 'cityB-d1' } : a)) }
     expect(validateDistrictAreas(broken).length).toBeGreaterThan(0)
+  })
+
+  it('登入帳號：英文字母、數字、_、-，且以英文字母開頭', () => {
+    for (const ok of ['abc', 'a1', 'Sa1_admin', 'a-b_c9']) expect(validateUsername(ok)).toBeNull()
+    for (const bad of ['', '1abc', '_abc', '-abc', '王署管', 'ab c', 'ab.c', 'ab@c']) expect(validateUsername(bad)).not.toBeNull()
+    expect(validateAccounts(data)).toEqual([])
+    const dup = { ...data, accounts: [...data.accounts, { ...data.accounts[0], id: 'zz', username: data.accounts[0].username.toUpperCase() }] }
+    expect(validateAccounts(dup).length).toBeGreaterThan(0)
+  })
+
+  it('學校管理員只能瀏覽本校使用者，且只能指派學校層級角色', () => {
+    const s = S('a05', 'i05a')
+    expect(s.role.name).toBe('學校管理員')
+    expect(inSessionScope(data, s, 'sA1')).toBe(true)
+    expect(inSessionScope(data, s, 'sA4')).toBe(false)
+    expect(inSessionScope(data, s, 'cityA')).toBe(false)
+    const mine = data.identities.filter((i) => inSessionScope(data, s, i.orgScopeId)).map((i) => i.accountId)
+    expect(mine).toEqual(expect.arrayContaining(['a05', 'a06', 'a07', 'a11']))
+    expect(mine).not.toContain('a09')
+    expect(mine).not.toContain('a10')
+    expect(mine).not.toContain('a03')
+    const codes = delegableRoles(data, s).map((r) => r.code).sort()
+    expect(codes).toEqual(['AIDE', 'SCHOOL_ADMIN', 'TEACHER'])
+    expect(authorize(data, s, 'admin:update', { scopeId: 'sA1' }).allowed).toBe(true)
+    expect(authorize(data, s, 'admin:update', { scopeId: 'sA4' })).toEqual({ allowed: false, reason: 'OUT_OF_SCOPE' })
+  })
+
+  it('署管理員可指派所有角色；縣市承辦層級角色不含署級', () => {
+    expect(delegableRoles(data, S('a01', 'i01')).length).toBe(data.roles.length)
+    expect(delegableRoles(data, S('a03', 'i03')).map((r) => r.code)).not.toContain('NEA_ADMIN')
   })
 })

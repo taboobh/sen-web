@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
-import type { AuthTarget, ReasonCode } from '../types'
-import { REASON_TEXT, authorize, buildMePermissions, resolveSession, validateAssignment, validateDistrictAreas } from '../auth/engine'
+import type { AuthTarget, ReasonCode, Stage } from '../types'
+import { REASON_TEXT, authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAssignment, validateDistrictAreas } from '../auth/engine'
 import { audit, db, logAudit } from './state'
 
 /**
@@ -30,7 +30,7 @@ export const handlers = [
     if (account.status !== 'active') return unauthorized('ACCOUNT_INACTIVE')
     const mine = db.identities.filter((i) => i.accountId === accountId)
     const usable = mine.find((i) => 'assignment' in pickFirst(i.id))
-    if (!usable) return unauthorized('ASSIGNMENT_EXPIRED')
+    if (!usable) return unauthorized(mine.some((i) => db.assignments.some((a) => a.identityId === i.id)) ? 'ASSIGNMENT_EXPIRED' : 'NO_ASSIGNMENT')
     return HttpResponse.json({ accountId, identityId: usable.id })
   }),
 
@@ -66,13 +66,13 @@ export const handlers = [
     const { session } = r
     const gate = authorize(db, session, 'students:read')
     if (!gate.allowed) {
-      logAudit({ accountName: session.accountName, roleName: session.role.name, permission: 'students:read', target: '清單', decision: 'DENY', reason: gate.reason })
+      logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'students:read', target: '清單', decision: 'DENY', reason: gate.reason })
       return forbidden(gate.reason)
     }
     // 資料範圍在「後端」過濾：不在範圍內的列根本不會回傳
     const rows = db.students.filter((st) =>
       authorize(db, session, 'students:read', { scopeId: st.schoolId, stage: st.stage, studentId: st.id }).allowed)
-    logAudit({ accountName: session.accountName, roleName: session.role.name, permission: 'students:read', target: `清單（${rows.length} 筆）`, decision: 'ALLOW', reason: 'OK' })
+    logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'students:read', target: `清單（${rows.length} 筆）`, decision: 'ALLOW', reason: 'OK' })
     return HttpResponse.json(rows.map((st) => ({ ...st, schoolName: db.scopes.find((x) => x.id === st.schoolId)?.name })))
   }),
 
@@ -87,7 +87,7 @@ export const handlers = [
       x.path.startsWith(db.scopes.find((y) => y.id === session.assignment.scopeId)!.path + '/')))
     const target: AuthTarget = { scopeId: school?.id, stage: school?.stages?.[0] }
     const d = authorize(db, session, 'students:create', target)
-    logAudit({ accountName: session.accountName, roleName: session.role.name, permission: 'students:create', target: school?.name ?? '-', decision: d.allowed ? 'ALLOW' : 'DENY', reason: d.reason })
+    logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'students:create', target: school?.name ?? '-', decision: d.allowed ? 'ALLOW' : 'DENY', reason: d.reason })
     if (!d.allowed || !school) return forbidden(d.allowed ? 'OUT_OF_SCOPE' : d.reason)
     const n = db.students.length + 1
     const created = { id: `st${String(n).padStart(3, '0')}`, name: `新增學生${n}`, schoolId: school.id, stage: school.stages![0], grade: '一年級', category: '待鑑定' }
@@ -104,7 +104,7 @@ export const handlers = [
     const st = db.students.find((x) => x.id === params.id)
     if (!st) return HttpResponse.json({ error: 'not_found' }, { status: 404 })
     const d = authorize(db, session, 'students:delete', { scopeId: st.schoolId, stage: st.stage, studentId: st.id })
-    logAudit({ accountName: session.accountName, roleName: session.role.name, permission: 'students:delete', target: st.name, decision: d.allowed ? 'ALLOW' : 'DENY', reason: d.reason })
+    logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'students:delete', target: st.name, decision: d.allowed ? 'ALLOW' : 'DENY', reason: d.reason })
     if (!d.allowed) return forbidden(d.reason)
     db.students.splice(db.students.indexOf(st), 1)
     return new HttpResponse(null, { status: 204 })
@@ -119,28 +119,75 @@ export const handlers = [
     const { permission, schoolId, studentId } = (await request.json()) as { permission: string; schoolId?: string; studentId?: string }
     const school = db.scopes.find((x) => x.id === schoolId)
     const d = authorize(db, r.session, permission, { scopeId: schoolId, stage: school?.stages?.[0], studentId })
-    logAudit({ accountName: r.session.accountName, roleName: r.session.role.name, permission, target: school?.name ?? '-', decision: d.allowed ? 'ALLOW' : 'DENY', reason: d.reason })
+    logAudit({ accountName: r.session.accountName, roleName: r.session.role.name, scopeId: r.session.assignment.scopeId, permission, target: school?.name ?? '-', decision: d.allowed ? 'ALLOW' : 'DENY', reason: d.reason })
     return HttpResponse.json({ ...d, message: REASON_TEXT[d.reason] })
   }),
 
-  // 治理畫面用的唯讀資料
+  // 治理畫面用的資料：依目前身分的「資料範圍」過濾，學校管理員只看得到本校的使用者與紀錄
   http.get('*/api/admin/overview', ({ request }) => {
     const s = readSession(request)
     if (!s) return unauthorized()
     const r = resolveSession(db, s.accountId, s.identityId, today())
     if ('reason' in r) return unauthorized(r.reason)
-    const d = authorize(db, r.session, 'admin:read')
+    const { session } = r
+    const d = authorize(db, session, 'admin:read')
     if (!d.allowed) return forbidden(d.reason)
+    const mine = session.assignment.scopeId
+    const inMine = (id: string) => inSessionScope(db, session, id)
+    const scopes = db.scopes.filter((x) => inMine(x.id))
+    const identities = db.identities.filter((i) => inMine(i.orgScopeId))
+    const assignments = db.assignments.filter((a) => inMine(a.scopeId) && identities.some((i) => i.id === a.identityId))
+    const accounts = db.accounts.filter((a) => identities.some((i) => i.accountId === a.id))
+    const areas = db.areas.filter((a) => inMine(a.districtId) || scopes.some((x) => x.areaId === a.id))
+    const canAssign = authorize(db, session, 'admin:update', { scopeId: mine }).allowed
     return HttpResponse.json({
+      rootId: mine,
+      scopeName: db.scopes.find((x) => x.id === mine)?.name,
       roles: db.roles,
-      scopes: db.scopes,
-      areas: db.areas,
-      areaProblems: validateDistrictAreas(db),
-      accounts: db.accounts,
-      identities: db.identities,
-      assignments: db.assignments.map((a) => ({ ...a, problem: validateAssignment(db, a) })),
-      audit,
+      scopes,
+      areas,
+      areaProblems: validateDistrictAreas({ ...db, scopes, areas }),
+      accounts,
+      identities,
+      assignments: assignments.map((a) => ({ ...a, problem: validateAssignment(db, a) })),
+      canAssign,
+      assignableRoles: canAssign ? delegableRoles(db, session).map((x) => x.code) : [],
+      audit: audit.filter((e) => e.scopeId && inMine(e.scopeId)),
     })
+  }),
+
+  // 指派角色：授權（admin:update＋資料範圍）、可委派的角色層級、角色最高層級，都由後端判斷
+  http.post('*/api/admin/assignments', async ({ request }) => {
+    const s = readSession(request)
+    if (!s) return unauthorized()
+    const r = resolveSession(db, s.accountId, s.identityId, today())
+    if ('reason' in r) return unauthorized(r.reason)
+    const { session } = r
+    const body = (await request.json()) as { identityId: string; roleCode: string; scopeId: string; stages?: string[]; effectiveFrom: string; effectiveTo: string }
+    const identity = db.identities.find((i) => i.id === body.identityId)
+    const role = db.roles.find((x) => x.code === body.roleCode)
+    const scope = db.scopes.find((x) => x.id === body.scopeId)
+    const acc = db.accounts.find((a) => a.id === identity?.accountId)
+    const log = (decision: 'ALLOW' | 'DENY', reason: ReasonCode) =>
+      logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'admin:update', target: `指派 ${role?.name ?? body.roleCode} 給 ${acc?.name ?? '-'}`, decision, reason })
+    const bad = (message: string) => HttpResponse.json({ error: 'invalid', message }, { status: 400 })
+    if (!identity || !role || !scope) return bad('身分、角色或資料範圍不存在')
+    // 對象使用者必須在自己的資料範圍內（學校管理員只能處理本校人員）
+    const gate = inSessionScope(db, session, identity.orgScopeId)
+      ? authorize(db, session, 'admin:update', { scopeId: scope.id })
+      : { allowed: false, reason: 'OUT_OF_SCOPE' as ReasonCode }
+    if (!gate.allowed) { log('DENY', gate.reason); return forbidden(gate.reason) }
+    if (!delegableRoles(db, session).some((x) => x.code === role.code)) { log('DENY', 'ROLE_NOT_DELEGABLE'); return forbidden('ROLE_NOT_DELEGABLE') }
+    const stages = (body.stages ?? []) as Stage[]
+    const draft = { id: `ra${String(db.assignments.length + 1).padStart(2, '0')}x`, identityId: identity.id, roleCode: role.code, scopeId: scope.id, stages, effectiveFrom: body.effectiveFrom, effectiveTo: body.effectiveTo, status: 'active' as const }
+    const problem = validateAssignment(db, draft)
+    if (problem) return bad(problem)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveTo) || draft.effectiveFrom > draft.effectiveTo) return bad('有效期間不正確')
+    if (scope.stages && stages.some((x) => !scope.stages!.includes(x))) return bad('教育階段不在該學校的教育階段內')
+    if (db.assignments.some((a) => a.identityId === identity.id && a.roleCode === role.code && a.scopeId === scope.id && a.status === 'active' && a.effectiveTo >= draft.effectiveFrom && a.effectiveFrom <= draft.effectiveTo)) return bad('此身分在該範圍已有相同角色且期間重疊')
+    db.assignments.push(draft)
+    log('ALLOW', 'OK')
+    return HttpResponse.json(draft, { status: 201 })
   }),
 ]
 

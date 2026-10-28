@@ -30,8 +30,8 @@ export default function Login() {
                 <Card
                   hoverable
                   size="small"
-                  title={a.name}
-                  extra={a.status === 'locked' ? <Tag color="red">已鎖定</Tag> : blocked ? <Tag color="orange">指派到期</Tag> : null}
+                  title={<>{a.name} <Typography.Text type="secondary" code style={{ fontSize: 12 }}>{a.username}</Typography.Text></>}
+                  extra={a.status === 'locked' ? <Tag color="red">已鎖定</Tag> : blocked ? <Tag color="orange">無可用角色</Tag> : null}
                   onClick={() => { login(a.id).catch((e: Error) => msg.error(e.message)) }}
                   style={{ height: '100%' }}
                 >

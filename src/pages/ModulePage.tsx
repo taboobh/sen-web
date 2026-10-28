@@ -32,7 +32,7 @@ export default function ModulePage() {
 
   let body
   if (moduleId === 'students' && (currentId === 'swd' || currentId === 'gift')) body = <StudentTable />
-  else if (moduleId === 'admin' && currentId === 'account') body = <AccountsView />
+  else if (moduleId === 'admin' && (currentId === 'account' || currentId === 'school-account')) body = <AccountsView />
   else if (moduleId === 'admin' && currentId === 'role') body = <RoleMatrixView />
   else if (moduleId === 'admin' && currentId === 'audit') body = <AuditView />
   else body = (
