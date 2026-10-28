@@ -177,7 +177,8 @@ export function createRbacData(): RbacData {
   return {
     scopes: SCOPES,
     areas: AREAS,
-    roles: ROLES,
+    // 角色範本可被署管理員修改：每份資料各自複製，避免改到常數
+    roles: ROLES.map((r) => ({ ...r, grants: { ...r.grants } })),
     accounts: ACCOUNTS,
     identities: IDENTITIES,
     assignments: ASSIGNMENTS,

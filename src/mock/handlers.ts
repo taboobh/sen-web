@@ -1,7 +1,8 @@
 import { http, HttpResponse } from 'msw'
 import type { AuthTarget, ReasonCode, Stage } from '../types'
-import { REASON_TEXT, assignableScopes, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAssignment, validateDistrictAreas } from '../auth/engine'
+import { REASON_TEXT, assignableScopes, canEditRoles, diffRole, normalizeGrants, validateRoleEdit, type RoleEdit, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAssignment, validateDistrictAreas } from '../auth/engine'
 import { audit, db, logAudit } from './state'
+import { MODULES } from './modules'
 
 /**
  * 假後端：規則與未來真實後端相同——每個請求都依「帳號＋目前身分」重新判斷授權。
@@ -151,6 +152,7 @@ export const handlers = [
       identities,
       assignments: assignments.map((a) => ({ ...a, problem: validateAssignment(db, a) })),
       canAssign,
+      canEditRoles: canEditRoles(db, session),
       assignableRoles: canAssign ? delegableRoles(db, session).map((x) => x.code) : [],
       // 角色 → 可選的資料範圍（指派畫面的「資料範圍」隨角色連動）
       assignableScopes: canAssign
@@ -195,6 +197,31 @@ export const handlers = [
     db.assignments.push(draft)
     log('ALLOW', 'OK')
     return HttpResponse.json(draft, { status: 201 })
+  }),
+
+  // 修改角色範本（角色與權限設定）：只有全國層的署管理員可修改，修改後立即對所有被指派此角色的人生效
+  http.put('*/api/admin/roles/:code', async ({ request, params }) => {
+    const s = readSession(request)
+    if (!s) return unauthorized()
+    const r = resolveSession(db, s.accountId, s.identityId, today())
+    if ('reason' in r) return unauthorized(r.reason)
+    const { session } = r
+    const role = db.roles.find((x) => x.code === params.code)
+    const log = (decision: 'ALLOW' | 'DENY', reason: ReasonCode, detail = '') =>
+      logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'admin:update', target: `修改角色 ${role?.name ?? String(params.code)}${detail}`, decision, reason })
+    if (!canEditRoles(db, session)) { log('DENY', 'NO_PERMISSION'); return forbidden('NO_PERMISSION') }
+    if (!role) return HttpResponse.json({ error: 'not_found', message: '角色不存在' }, { status: 404 })
+    const body = (await request.json()) as RoleEdit
+    const problem = validateRoleEdit(db, role.code, body, MODULES.map((m) => m.id))
+    if (problem) return HttpResponse.json({ error: 'invalid', message: problem }, { status: 400 })
+    const changes = diffRole(role, body).map((c) => c.replace(/^([a-z]+) /, (_m, id: string) => `${MODULES.find((x) => x.id === id)?.name ?? id} `))
+    if (changes.length === 0) return HttpResponse.json(role)
+    role.name = body.name.trim()
+    role.maxScope = body.maxScope
+    role.relationLimited = !!body.relationLimited || undefined
+    role.grants = normalizeGrants(body.grants)
+    log('ALLOW', 'OK', `：${changes.join('；')}`)
+    return HttpResponse.json(role)
   }),
 ]
 

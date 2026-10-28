@@ -133,6 +133,69 @@ export function assignmentDenial(data: RbacData, s: ResolvedSession, roleCode: s
   return null
 }
 
+/**
+ * 角色與權限設定：只有「在全國層（ROOT）被指派、且有帳號與權限模組修改權」的署管理員可修改角色範本。
+ * 其他角色（含縣市、學校管理員）只能瀏覽。
+ */
+export function canEditRoles(data: RbacData, s: ResolvedSession): boolean {
+  const scope = data.scopes.find((x) => x.id === s.assignment.scopeId)
+  return s.role.code === 'NEA_ADMIN' && scope?.type === 'ROOT' && authorize(data, s, 'admin:update').allowed
+}
+
+export interface RoleEdit { name: string; maxScope: ScopeType; relationLimited: boolean; grants: Record<string, string> }
+const ACTION_ORDER = 'CRUDAE'
+
+/** 動作字母依 C R U D A E 排序並去除重複、空模組 */
+export function normalizeGrants(grants: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [m, letters] of Object.entries(grants)) {
+    const v = [...ACTION_ORDER].filter((c) => letters.includes(c)).join('')
+    if (v) out[m] = v
+  }
+  return out
+}
+
+/** 修改角色範本的檢查（後端用）：回傳錯誤訊息或 null */
+export function validateRoleEdit(data: RbacData, code: string, edit: RoleEdit, moduleIds: string[]): string | null {
+  const role = data.roles.find((r) => r.code === code)
+  if (!role) return '角色不存在'
+  const name = (edit.name ?? '').trim()
+  if (!name) return '請輸入角色名稱'
+  if (data.roles.some((r) => r.code !== code && r.name === name)) return `角色名稱「${name}」已被使用`
+  if (!(edit.maxScope in RANK)) return '最高層級不正確'
+  for (const [m, letters] of Object.entries(edit.grants ?? {})) {
+    if (!moduleIds.includes(m)) return `模組 ${m} 不存在`
+    if ([...letters].some((c) => !ACTION_ORDER.includes(c))) return `模組 ${m} 的動作不正確（只能用 C R U D A E）`
+  }
+  const grants = normalizeGrants(edit.grants ?? {})
+  // 防止鎖死：署管理員必須保留全國層級，以及「帳號與權限」的查詢與修改
+  if (code === 'NEA_ADMIN') {
+    if (edit.maxScope !== 'ROOT') return '署管理員的最高層級必須維持全國（ROOT）'
+    if (!(grants.admin ?? '').includes('R') || !(grants.admin ?? '').includes('U')) return '署管理員必須保留「帳號與權限」的查詢與修改，否則將無人能再修改角色'
+  }
+  // 調高最低可指派層級前，既有指派不得因此失效
+  const conflicts = data.assignments.filter((a) => {
+    const sc = data.scopes.find((x) => x.id === a.scopeId)
+    return a.roleCode === code && a.status === 'active' && sc && RANK[sc.type] < RANK[edit.maxScope]
+  })
+  if (conflicts.length) return `已有 ${conflicts.length} 筆「${role.name}」的指派高於新的最高層級，請先調整或撤銷這些指派`
+  return null
+}
+
+/** 修改前後差異（稽核用） */
+export function diffRole(before: Role, after: RoleEdit): string[] {
+  const out: string[] = []
+  if (before.name !== after.name.trim()) out.push(`名稱 ${before.name}→${after.name.trim()}`)
+  if (before.maxScope !== after.maxScope) out.push(`最高層級 ${before.maxScope}→${after.maxScope}`)
+  if (!!before.relationLimited !== !!after.relationLimited) out.push(`責任關係限制 ${before.relationLimited ? '是' : '否'}→${after.relationLimited ? '是' : '否'}`)
+  const g = normalizeGrants(after.grants)
+  for (const m of new Set([...Object.keys(before.grants), ...Object.keys(g)])) {
+    const a = before.grants[m] ?? '', b = g[m] ?? ''
+    if (a !== b) out.push(`${m} ${a || '—'}→${b || '—'}`)
+  }
+  return out
+}
+
 export function isWithinPeriod(a: RoleAssignment, now: string): boolean {
   return a.status === 'active' && (!a.effectiveFrom || a.effectiveFrom <= now) && (!a.effectiveTo || now <= a.effectiveTo)
 }

@@ -5,12 +5,14 @@ import type { DataNode } from 'antd/es/tree'
 import { api, ApiError } from '../api/client'
 import { ACTION_LABEL, ACTION_LETTER, type AdminArea, type Account, type AuditEntry, type Identity, type Role, type RoleAssignment, type ScopeNode } from '../types'
 import { REASON_TEXT } from '../auth/engine'
+import { useAuth } from '../auth/AuthContext'
+import type { ScopeType } from '../types'
 import { MODULES } from '../mock/modules'
 
 type AssignmentRow = RoleAssignment & { problem: string | null }
 
 interface Overview {
-  rootId: string; scopeName: string; canAssign: boolean; assignableRoles: string[]
+  rootId: string; scopeName: string; canAssign: boolean; canEditRoles: boolean; assignableRoles: string[]
   roles: Role[]; assignableScopes: Record<string, string[]>; scopes: ScopeNode[]; areas: AdminArea[]; areaProblems: string[]; accounts: Account[]; identities: Identity[]
   assignments: AssignmentRow[]; audit: AuditEntry[]
 }
@@ -145,8 +147,12 @@ function AssignModal({ d, identity, onClose, onDone }: { d: Overview; identity: 
   )
 }
 
+const SCOPE_LABEL: Record<ScopeType, string> = { ROOT: '全國（署）', CITY: '縣市', DISTRICT: '分區', SCHOOL: '學校' }
+const LETTERS = Object.keys(ACTION_LETTER)
+
 export function RoleMatrixView() {
-  const { data, err } = useOverview()
+  const { data, err, reload } = useOverview()
+  const [editing, setEditing] = useState<Role | null>(null)
   return (
     <Gate data={data} err={err}>{(d) => {
       const tree = (parent: string | null): DataNode[] =>
@@ -160,6 +166,10 @@ export function RoleMatrixView() {
       return (
         <>
           <Card title="角色 × 模組 × 動作（示範值，待業務核准）" style={{ marginBottom: 16 }}>
+            {d.canEditRoles
+              ? <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="您是署管理員，可點角色欄位上方的「修改」調整角色的權限、最高層級與責任關係限制。"
+                  description="修改會立即套用到所有被指派此角色的使用者，並寫入稽核紀錄。示範資料只存在記憶體，重新整理即還原。" />
+              : <Alert type="info" showIcon style={{ marginBottom: 12 }} message="唯讀：角色與權限只有署管理員可以修改。" />}
             <Typography.Paragraph type="secondary">
               {Object.entries(ACTION_LETTER).map(([k, v]) => `${k}＝${ACTION_LABEL[v]}`).join('　')}　｜　「最高層級」是角色可被指派的最高節點。
             </Typography.Paragraph>
@@ -169,7 +179,8 @@ export function RoleMatrixView() {
                 { key: 'module', title: '模組', value: (m) => m.name, fixed: 'left', width: 140 },
                 ...d.roles.map((r): Col<{ id: string; name: string }> => ({
                   key: r.code, title: r.name,
-                  titleNode: <>{r.name}<br /><Typography.Text type="secondary" style={{ fontSize: 11 }}>最高：{r.maxScope}{r.relationLimited ? '・關係' : ''}</Typography.Text></>,
+                  titleNode: <>{r.name}<br /><Typography.Text type="secondary" style={{ fontSize: 11 }}>最高：{r.maxScope}{r.relationLimited ? '・關係' : ''}</Typography.Text>
+                    {d.canEditRoles && <><br /><Button size="small" type="link" style={{ padding: 0, height: 'auto' }} onClick={(e) => { e.stopPropagation(); setEditing(r) }}>修改</Button></>}</>,
                   value: (m) => r.grants[m.id] ?? '',
                   render: (m) => r.grants[m.id] ? <Tag color="blue">{r.grants[m.id]}</Tag> : <span style={{ color: '#ccc' }}>—</span>,
                 })),
@@ -180,9 +191,73 @@ export function RoleMatrixView() {
             {d.areaProblems.length > 0 && <Alert type="error" showIcon style={{ marginBottom: 12 }} message="分區組成有問題" description={d.areaProblems.join("；")} />}
             <Tree defaultExpandAll treeData={tree(d.scopes.find((s) => s.id === d.rootId)?.parentId ?? null)} selectable={false} />
           </Card>
+          <RoleEditModal role={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload() }} />
         </>
       )
     }}</Gate>
+  )
+}
+
+function RoleEditModal({ role, onClose, onDone }: { role: Role | null; onClose: () => void; onDone: () => void }) {
+  const [form] = Form.useForm()
+  const [saving, setSaving] = useState(false)
+  const [msg, ctx] = message.useMessage()
+  const { refresh } = useAuth()
+  const isNea = role?.code === 'NEA_ADMIN'
+
+  const init = () => {
+    if (!role) return
+    form.setFieldsValue({
+      name: role.name, maxScope: role.maxScope, relationLimited: !!role.relationLimited,
+      ...Object.fromEntries(MODULES.map((m) => [`g_${m.id}`, [...(role.grants[m.id] ?? '')]])),
+    })
+  }
+
+  const submit = async () => {
+    const v = await form.validateFields()
+    const grants = Object.fromEntries(MODULES.map((m) => [m.id, ((v[`g_${m.id}`] ?? []) as string[]).join('')]))
+    setSaving(true)
+    try {
+      await api(`/admin/roles/${role!.code}`, { method: 'PUT', json: { name: v.name, maxScope: v.maxScope, relationLimited: !!v.relationLimited, grants } })
+      msg.success('已更新角色權限')
+      await refresh() // 若改到自己的角色，選單與按鈕立即更新
+      onDone()
+    } catch (e) { msg.error(e instanceof ApiError ? e.message : '儲存失敗') } finally { setSaving(false) }
+  }
+
+  return (
+    <Modal open={!!role} width={720} title={`修改角色：${role?.name ?? ''}（${role?.code ?? ''}）`} okText="儲存" cancelText="取消"
+      confirmLoading={saving} onOk={() => { void submit() }} onCancel={onClose} destroyOnClose afterOpenChange={(o) => { if (o) init() }}>
+      {ctx}
+      <Typography.Paragraph type="secondary">
+        儲存後立即套用到所有被指派此角色的使用者，並寫入稽核紀錄。{isNea && '署管理員須保留全國層級及「帳號與權限」的查詢、修改，避免無人能再修改角色。'}
+        後端會再檢查一次（例如既有指派高於新的最高層級時不可儲存）。
+      </Typography.Paragraph>
+      <Form form={form} layout="vertical">
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <Form.Item name="name" label="角色名稱" rules={[{ required: true, whitespace: true, message: '請輸入角色名稱' }]} style={{ flex: '1 1 200px' }}>
+            <Input maxLength={30} />
+          </Form.Item>
+          <Form.Item name="maxScope" label="最高層級（可被指派的最高節點）" style={{ flex: '1 1 200px' }}>
+            <Select disabled={isNea} options={(Object.keys(SCOPE_LABEL) as ScopeType[]).map((k) => ({ value: k, label: `${SCOPE_LABEL[k]}（${k}）` }))} />
+          </Form.Item>
+        </div>
+        <Form.Item name="relationLimited" valuePropName="checked">
+          <Checkbox>限責任關係（只能操作與自己有責任關係的學生，例如特教教師）</Checkbox>
+        </Form.Item>
+        <Typography.Text strong>模組權限</Typography.Text>
+        <div style={{ maxHeight: 360, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 6, padding: '4px 12px', marginTop: 8 }}>
+          {MODULES.map((m) => (
+            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '6px 0', borderBottom: '1px solid #fafafa' }}>
+              <span style={{ width: 120, flex: '0 0 auto' }}>{m.name}</span>
+              <Form.Item name={`g_${m.id}`} style={{ margin: 0 }}>
+                <Checkbox.Group options={LETTERS.map((c) => ({ value: c, label: `${ACTION_LABEL[ACTION_LETTER[c]]}`, disabled: isNea && m.id === 'admin' && (c === 'R' || c === 'U') }))} />
+              </Form.Item>
+            </div>
+          ))}
+        </div>
+      </Form>
+    </Modal>
   )
 }
 

@@ -9,6 +9,8 @@ interface AuthState {
   login: (accountId: string) => Promise<void>
   switchIdentity: (identityId: string) => Promise<void>
   logout: () => void
+  /** 重新向後端取得「我的權限」（例如角色權限被修改後） */
+  refresh: () => Promise<void>
   /** 前端顯示用：是否有「模組:動作」。真正的授權在後端。 */
   can: (moduleId: string, action: Action) => boolean
 }
@@ -55,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const can = useCallback((moduleId: string, action: Action) => !!me?.permissions.includes(`${moduleId}:${action}`), [me])
 
-  const value = useMemo(() => ({ me, loading, error, login, switchIdentity, logout, can }), [me, loading, error, login, switchIdentity, logout, can])
+  const value = useMemo(() => ({ me, loading, error, login, switchIdentity, logout, refresh, can }), [me, loading, error, login, switchIdentity, logout, refresh, can])
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 
