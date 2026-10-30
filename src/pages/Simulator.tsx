@@ -9,8 +9,8 @@ interface Result { allowed: boolean; reason: string; message: string }
 interface School { id: string; name: string }
 
 const SCHOOLS: School[] = [
-  { id: 'sA1', name: '甲市光明國小' }, { id: 'sA2', name: '甲市和平國中' }, { id: 'sA3', name: '甲市文華高職' },
-  { id: 'sA4', name: '甲市青山國小' }, { id: 'sB1', name: '乙縣海岸國小' }, { id: 'sB2', name: '乙縣山林國中' }, { id: 'sC1', name: '丙市河畔國小' },
+  { id: 'sA1', name: '新北市 市立板橋國小（第一分區）' }, { id: 'sA2', name: '新北市 市立中和國中（第一分區）' }, { id: 'sA3', name: '新北市 市立三重高中（第二分區）' },
+  { id: 'sA4', name: '新北市 市立三重國小（第二分區）' }, { id: 'sN1', name: '國立華僑高級中等學校（署轄）' }, { id: 'sB1', name: '臺中市 市立大同國小' }, { id: 'sB2', name: '臺中市 市立雙十國中' }, { id: 'sC1', name: '臺北市 市立螢橋國小' },
 ]
 
 /** 權限模擬：選功能與目標，詢問後端「目前身分能不能做」並看到原因，方便夥伴驗證規則。 */

@@ -1,10 +1,11 @@
 import { http, HttpResponse } from 'msw'
 import type { AuthTarget, ReasonCode, Stage } from '../types'
 import { END_REASON_TEXT, type EndReason } from '../types'
-import { REASON_TEXT, endIdentity, syncSsoAffiliation, assignableScopes, canEditRoles, diffRole, normalizeGrants, validateRoleEdit, type RoleEdit, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, validateAssignment, validateDistrictAreas, primaryConflict } from '../auth/engine'
+import { REASON_TEXT, orgBlockedText, endIdentity, syncSsoAffiliation, assignableScopes, canEditRoles, diffRole, normalizeGrants, validateRoleEdit, type RoleEdit, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, validateAssignment, validateDistrictAreas, primaryConflict } from '../auth/engine'
 import { audit, db, logAudit } from './state'
 import { forbidden, publicAccount, readSession, resolveGated, today, unauthorized } from './session'
 import { profileHandlers } from './profileHandlers'
+import { schoolHandlers } from './schoolHandlers'
 import { profileGate } from '../auth/profile'
 import type { LoginMethod } from '../types'
 import { MODULES } from './modules'
@@ -15,6 +16,7 @@ import { MODULES } from './modules'
  */
 export const handlers = [
   ...profileHandlers,
+  ...schoolHandlers,
   // 模擬登入：只選帳號，不需密碼
   http.post('*/api/auth/login', async ({ request }) => {
     const { accountId, method } = (await request.json()) as { accountId: string; method?: LoginMethod }
@@ -93,13 +95,17 @@ export const handlers = [
     const r = resolveGated(s)
     if ('reason' in r) return unauthorized(r.reason)
     const { session } = r
-    // 新增到哪所學校：學校層級用自己的學校，其他層級用範圍內第一所學校
-    const school = db.scopes.find((x) => x.type === 'SCHOOL' && (x.id === session.assignment.scopeId ||
-      x.path.startsWith(db.scopes.find((y) => y.id === session.assignment.scopeId)!.path + '/')))
+    // 新增到哪所學校：學校層級用自己的學校，其他層級用範圍內第一所「使用中」的學校
+    const mineScope = db.scopes.find((y) => y.id === session.assignment.scopeId)!
+    const inMine = db.scopes.filter((x) => x.type === 'SCHOOL' && (x.id === mineScope.id || x.path.startsWith(mineScope.path + '/')))
+    const school = mineScope.type === 'SCHOOL' ? mineScope : inMine.find((x) => (x.school?.status ?? 'active') === 'active') ?? inMine[0]
     const target: AuthTarget = { scopeId: school?.id, stage: school?.stages?.[0] }
     const d = authorize(db, session, 'students:create', target)
     logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'students:create', target: school?.name ?? '-', decision: d.allowed ? 'ALLOW' : 'DENY', reason: d.reason })
     if (!d.allowed || !school) return forbidden(d.allowed ? 'OUT_OF_SCOPE' : d.reason)
+    // 學校狀態：停招不收新生、籌備處尚未開學、廢校不可新增
+    const st = school.school?.status ?? 'active'
+    if (st !== 'active') return HttpResponse.json({ error: 'invalid', message: `${school.name} 目前為「${st === 'closing' ? '停招' : st === 'preparing' ? '未啟用（籌備處）' : '廢校／停辦'}」，不能新增學生` }, { status: 400 })
     const n = db.students.length + 1
     const created = { id: `st${String(n).padStart(3, '0')}`, name: `新增學生${n}`, schoolId: school.id, stage: school.stages![0], grade: '一年級', category: '待鑑定' }
     db.students.push(created)
@@ -155,7 +161,8 @@ export const handlers = [
       rootId: mine,
       scopeName: db.scopes.find((x) => x.id === mine)?.name,
       roles: db.roles,
-      scopes,
+      // 學校只帶代碼與狀態（完整主檔另由 /api/schools 提供），避免全國四千多校的資料一次送出
+      scopes: scopes.map((x) => x.school ? { ...x, school: undefined, schoolCode: x.school.code, schoolStatus: x.school.status } : x),
       areas,
       areaProblems: validateDistrictAreas({ ...db, scopes, areas }),
       accounts: accounts.map(publicAccount),
@@ -189,6 +196,8 @@ export const handlers = [
     const bad = (message: string) => HttpResponse.json({ error: 'invalid', message }, { status: 400 })
     if (!identity || !role || !scope) return bad('身分、角色或資料範圍不存在')
     if (identity.status === 'ended') return bad('此身分已離任，不能指派角色')
+    const blocked = orgBlockedText(scope) ?? orgBlockedText(db.scopes.find((x) => x.id === identity.orgScopeId))
+    if (blocked) return bad(blocked)
     // 對象使用者必須在自己的資料範圍內（學校管理員只能處理本校人員）
     const gate = inSessionScope(db, session, identity.orgScopeId)
       ? authorize(db, session, 'admin:update', { scopeId: scope.id })
@@ -255,6 +264,8 @@ export const handlers = [
       logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'admin:update', target: `新增身分 ${org?.name ?? body.orgScopeId} 給 ${acc?.name ?? '-'}`, decision, reason })
     const bad = (message: string) => HttpResponse.json({ error: 'invalid', message }, { status: 400 })
     if (!acc || !org) return bad('帳號或機構不存在')
+    const blocked = orgBlockedText(org)
+    if (blocked) return bad(blocked)
     const jobTitle = (body.jobTitle ?? '').trim()
     if (!jobTitle) return bad('請填寫職稱')
     const gate = inSessionScope(db, session, org.id)

@@ -1,3 +1,4 @@
+import type { SchoolLevel } from './schools/moe'
 export type ScopeType = 'ROOT' | 'CITY' | 'DISTRICT' | 'SCHOOL'
 export type Stage = '學前' | '國小' | '國中' | '高中職' | '大專'
 
@@ -14,6 +15,63 @@ export interface ScopeNode {
   areaId?: string
   /** 署轄學校（國教署直接管轄）：學校管理員由署端管理員指派；其餘學校由縣市管理員指派 */
   ntaDirect?: boolean
+  /** 學校主檔（教育部統計處名錄＋在地維護欄位）；僅學校節點 */
+  school?: SchoolInfo
+  /** 縣市名稱（對應統計處名錄的「縣市名稱」）；僅縣市節點 */
+  cityName?: string
+  /** 治理畫面用的精簡欄位（後端只帶代碼與狀態，不帶完整學校主檔） */
+  schoolCode?: string
+  schoolStatus?: SchoolStatus
+}
+
+/**
+ * 學校狀態：
+ * active 使用中；closing 停招（既有學生畢業前仍可作為本職機構）；
+ * preparing 未啟用（有代碼的籌備處，可先建立帳號，尚不能建立學生）；closed 廢校／停辦（不可再選為任職機構）
+ */
+export type SchoolStatus = 'active' | 'closing' | 'preparing' | 'closed'
+export const SCHOOL_STATUS_TEXT: Record<SchoolStatus, string> = { active: '使用中', closing: '停招', preparing: '未啟用（籌備處）', closed: '廢校／停辦' }
+
+export interface SchoolInfo {
+  /** 教育部學校代碼（6 碼） */
+  code: string
+  /** 學制（統計處名錄別）；同代碼在多個名錄時取聯集 */
+  levels: SchoolLevel[]
+  ownership: '公立' | '私立' | ''
+  city: string
+  town: string
+  zip: string
+  address: string
+  phone: string
+  website: string
+  status: SchoolStatus
+  statusSince?: string
+  statusNote?: string
+  /** 最近一次出現在統計處名錄的學年度；null＝手動新增 */
+  moeYear: number | null
+  source: 'moe' | 'manual'
+  /** 改制換代碼前的舊代碼 */
+  oldCodes?: string[]
+  /** 更名前的校名 */
+  oldNames?: string[]
+  /** 學校自行維護：校長 */
+  principal?: string
+  /** 學校自行維護：發言人（聯絡人） */
+  contact?: { name?: string; title?: string; phone?: string; email?: string }
+  /** 電話已由學校自行維護：之後的名錄匯入不再覆寫電話 */
+  phoneBySchool?: boolean
+  /** 異動紀錄 */
+  history: { at: string; by: string; text: string }[]
+}
+
+export interface SchoolImportRecord {
+  id: number
+  at: string
+  by: string
+  year: number | null
+  levels: SchoolLevel[]
+  files: string[]
+  summary: Record<string, number>
 }
 
 export interface Role {
@@ -134,6 +192,8 @@ export interface RbacData {
   ssoGuids: Record<string, string>
   /** 模擬教育雲端回傳的任職學校代碼（titles[].schoolid）與職稱；教育雲端登入時用來同步任職機構 */
   ssoProfiles: Record<string, { schoolIds: string[]; jobTitle?: string }>
+  /** 學校名錄匯入紀錄 */
+  schoolImports: SchoolImportRecord[]
 }
 
 export interface MenuItem { id: string; title: string }

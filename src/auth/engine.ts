@@ -19,9 +19,17 @@ export function expandPermissions(role: Role): string[] {
   return out
 }
 
+/** 依 id 查節點的索引（全國四千多校，避免在迴圈中線性搜尋）；陣列長度改變時重建 */
+const INDEX = new WeakMap<ScopeNode[], { n: number; map: Map<string, ScopeNode> }>()
+export function scopeById(scopes: ScopeNode[], id: string): ScopeNode | undefined {
+  let ix = INDEX.get(scopes)
+  if (!ix || ix.n !== scopes.length) { ix = { n: scopes.length, map: new Map(scopes.map((s) => [s.id, s])) }; INDEX.set(scopes, ix) }
+  return ix.map.get(id)
+}
+
 export function scopeContains(scopes: ScopeNode[], ancestorId: string, targetId: string): boolean {
-  const a = scopes.find((s) => s.id === ancestorId)
-  const t = scopes.find((s) => s.id === targetId)
+  const a = scopeById(scopes, ancestorId)
+  const t = scopeById(scopes, targetId)
   if (!a || !t) return false
   return t.path === a.path || t.path.startsWith(a.path + '/')
 }
@@ -53,6 +61,18 @@ export function primaryConflict(data: RbacData, accountId: string, draft: RoleAs
   return homeOrgs.has(org) ? null : '此帳號的本職只有一個機構；在其他（外部）單位的角色請指派為借調並填寫有效期間'
 }
 
+/**
+ * 學校狀態對任職與角色的影響：廢校／停辦不可再選為任職機構或指派範圍；
+ * 停招（既有學生畢業前）與未啟用（有代碼的籌備處，可先建立帳號）仍可選。
+ */
+export function orgSelectable(scope?: ScopeNode): boolean {
+  return !!scope && scope.school?.status !== 'closed'
+}
+export function orgBlockedText(scope?: ScopeNode): string | null {
+  if (!scope) return '機構不存在'
+  return scope.school?.status === 'closed' ? `${scope.name} 已廢校／停辦，不能再選為任職機構或指派角色` : null
+}
+
 /** 分區組成檢查：行政區／鄉鎮必須屬於同縣市的某個分區；學校所在行政區須屬於其上層分區 */
 export function validateDistrictAreas(data: RbacData): string[] {
   const problems: string[] = []
@@ -67,7 +87,7 @@ export function validateDistrictAreas(data: RbacData): string[] {
   for (const d of data.scopes.filter((s) => s.type === 'DISTRICT')) {
     if (!data.areas.some((a) => a.districtId === d.id)) problems.push(`${d.name} 沒有任何行政區／鄉鎮`)
   }
-  for (const s of data.scopes.filter((x) => x.type === 'SCHOOL' && !x.ntaDirect)) {
+  for (const s of data.scopes.filter((x) => x.type === 'SCHOOL' && !x.ntaDirect && x.school?.status !== 'closed')) {
     const a = data.areas.find((x) => x.id === s.areaId)
     if (!a) problems.push(`${s.name} 未指定行政區／鄉鎮`)
     else if (a.districtId !== s.parentId) problems.push(`${s.name} 的行政區不屬於其上層分區`)
@@ -129,7 +149,7 @@ export function assignableScopes(data: RbacData, s: ResolvedSession, roleCode: s
   const role = data.roles.find((r) => r.code === roleCode)
   if (!role || !delegableByLevel(data, s).some((r) => r.code === roleCode)) return []
   return data.scopes.filter((x) =>
-    inSessionScope(data, s, x.id) && RANK[x.type] >= RANK[role.maxScope] &&
+    orgSelectable(x) && inSessionScope(data, s, x.id) && RANK[x.type] >= RANK[role.maxScope] &&
     (roleCode !== 'SCHOOL_ADMIN' || schoolAdminAllowed(data, s, x)))
 }
 
@@ -241,7 +261,8 @@ export interface AffiliationChange {
  * 3. 縣市、署等非學校的身分不受影響；學校代碼為空或不存在時不做任何變更。
  */
 export function syncSsoAffiliation(data: RbacData, accountId: string, schoolIds: string[], now: string, jobTitle = '待確認'): AffiliationChange[] {
-  const valid = schoolIds.filter((id) => data.scopes.some((s) => s.id === id && s.type === 'SCHOOL'))
+  // 教育雲端回傳的學校代碼若已廢校，不據以變更任職機構
+  const valid = schoolIds.filter((id) => data.scopes.some((s) => s.id === id && s.type === 'SCHOOL' && orgSelectable(s)))
   if (valid.length === 0) return []
   const out: AffiliationChange[] = []
   const isSchool = (orgId: string) => data.scopes.find((s) => s.id === orgId)?.type === 'SCHOOL'

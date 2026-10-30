@@ -4,7 +4,7 @@ import DataTable, { type Col } from '../components/DataTable'
 import type { DataNode } from 'antd/es/tree'
 import { api, ApiError } from '../api/client'
 import { ALL_CONTACTS, CONTACT_LABEL, VERIFIABLE } from '../auth/profile'
-import { END_REASON_TEXT, type EndReason, ACTION_LABEL, ACTION_LETTER, type ContactField, type ProfileSettings, type AdminArea, type Account, type AuditEntry, type Identity, type Role, type RoleAssignment, type ScopeNode } from '../types'
+import { SCHOOL_STATUS_TEXT, END_REASON_TEXT, type EndReason, ACTION_LABEL, ACTION_LETTER, type ContactField, type ProfileSettings, type AdminArea, type Account, type AuditEntry, type Identity, type Role, type RoleAssignment, type ScopeNode } from '../types'
 import { REASON_TEXT } from '../auth/engine'
 import { useAuth } from '../auth/AuthContext'
 import type { ScopeType } from '../types'
@@ -200,7 +200,10 @@ function AddIdentityModal({ d, account, onClose, onDone }: { d: Overview; accoun
   const [saving, setSaving] = useState(false)
   const [msg, ctx] = message.useMessage()
   const has = new Set(d.identities.filter((i) => i.accountId === account?.id && i.status !== 'ended').map((i) => i.orgScopeId))
-  const options = d.scopes.filter((x) => !has.has(x.id)).map((x) => ({ value: x.id, label: x.name }))
+  // 廢校／停辦的學校不能再選；停招、未啟用（籌備處）仍可選並標示
+  const tag = (x: ScopeNode) => x.schoolStatus === 'closing' ? '（停招）' : x.schoolStatus === 'preparing' ? '（未啟用・籌備處）' : ''
+  const options = d.scopes.filter((x) => !has.has(x.id) && x.schoolStatus !== 'closed')
+    .map((x) => ({ value: x.id, label: `${x.schoolCode ? `${x.schoolCode} ` : ''}${x.name}${tag(x)}` }))
   const submit = async () => {
     const v = await form.validateFields()
     setSaving(true)
@@ -310,7 +313,7 @@ export function RoleMatrixView() {
           key: s.id,
           title: s.type === 'DISTRICT'
             ? `${s.name}（DISTRICT）涵蓋：${d.areas.filter((a) => a.districtId === s.id).map((a) => a.name).join('、')}`
-            : s.type === 'SCHOOL' ? `${s.name}（SCHOOL，位於${d.areas.find((a) => a.id === s.areaId)?.name ?? '未指定'}）` : `${s.name}（${s.type}）`,
+            : s.type === 'SCHOOL' ? `${s.schoolCode ?? ''} ${s.name}（${d.areas.find((a) => a.id === s.areaId)?.name ?? '未指定行政區'}${s.schoolStatus && s.schoolStatus !== 'active' ? `・${SCHOOL_STATUS_TEXT[s.schoolStatus]}` : ''}）` : `${s.name}（${s.type}）`,
           children: tree(s.id),
         }))
       return (
@@ -339,7 +342,9 @@ export function RoleMatrixView() {
           </Card>
           <Card title="資料範圍樹（分區 = 多個行政區／鄉鎮）">
             {d.areaProblems.length > 0 && <Alert type="error" showIcon style={{ marginBottom: 12 }} message="分區組成有問題" description={d.areaProblems.join("；")} />}
-            <Tree defaultExpandAll treeData={tree(d.scopes.find((s) => s.id === d.rootId)?.parentId ?? null)} selectable={false} />
+            <Typography.Paragraph type="secondary">學校共 {d.scopes.filter((s) => s.type === 'SCHOOL').length} 所（教育部統計處名錄）；預設展開到分區，點分區看學校。</Typography.Paragraph>
+            <Tree height={560} defaultExpandedKeys={d.scopes.filter((s) => s.type === 'ROOT' || s.type === 'CITY').map((s) => s.id)}
+              treeData={tree(d.scopes.find((s) => s.id === d.rootId)?.parentId ?? null)} selectable={false} />
           </Card>
           <RoleEditModal role={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload() }} />
         </>

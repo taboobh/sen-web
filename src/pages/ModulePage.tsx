@@ -8,6 +8,7 @@ import { ACTION_LABEL, type Action } from '../types'
 import StudentTable from './StudentTable'
 import { AccountsView, AuditView, IdReviewView, ProfileSettingsView, RoleMatrixView } from './AdminViews'
 import ProfileView from './ProfilePage'
+import SchoolsView from './SchoolsView'
 
 const ACTIONS: Action[] = ['create', 'read', 'update', 'delete', 'approve', 'export']
 
@@ -33,6 +34,7 @@ export default function ModulePage() {
 
   let body
   if (moduleId === 'students' && (currentId === 'swd' || currentId === 'gift')) body = <StudentTable />
+  else if (moduleId === 'base' && currentId === 'school') body = <SchoolsView />
   else if (moduleId === 'admin' && currentId === 'account') body = <AccountsView />
   else if (moduleId === 'admin' && currentId === 'role') body = <RoleMatrixView />
   else if (moduleId === 'admin' && currentId === 'audit') body = <AuditView />

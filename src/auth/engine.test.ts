@@ -65,10 +65,16 @@ describe('授權引擎', () => {
   })
 
   it('分區由多個行政區／鄉鎮組成，且每個行政區只屬於一個分區', () => {
-    expect(validateDistrictAreas(data)).toEqual([])
+    // 真實名錄中少數學校地址缺鄉鎮市區（例如「臺北市忠孝東路…」）→ 只會被標示為「未指定行政區／鄉鎮」，不應有其他問題
+    const problems = validateDistrictAreas(data)
+    expect(problems.every((p) => p.endsWith('未指定行政區／鄉鎮'))).toBe(true)
+    const noTown = data.scopes.filter((x) => x.type === 'SCHOOL' && !x.ntaDirect && !x.areaId)
+    expect(problems.length).toBe(noTown.length)
     const multi = data.areas.filter((a) => a.districtId === 'cityA-d1')
     expect(multi.length).toBeGreaterThan(1)
-    const broken = { ...data, areas: data.areas.map((a) => (a.id === 'arA1' ? { ...a, districtId: 'cityB-d1' } : a)) }
+    const banqiao = data.areas.find((a) => a.name === '新北市板橋區')!
+    expect(banqiao.districtId).toBe('cityA-d1')
+    const broken = { ...data, areas: data.areas.map((a) => (a.id === banqiao.id ? { ...a, districtId: 'cityB-d1' } : a)) }
     expect(validateDistrictAreas(broken).length).toBeGreaterThan(0)
   })
 
@@ -115,8 +121,14 @@ describe('授權引擎', () => {
 describe('指派角色規則', () => {
   it('署轄學校的學校管理員只有署管理員能指派；其他學校只有縣市管理員能指派', () => {
     const nea = S('a01', 'i01'), city = S('a03', 'i03'), school = S('a05', 'i05a')
-    expect(assignableScopes(data, nea, 'SCHOOL_ADMIN').map((x) => x.id)).toEqual(['sN1'])
-    expect(assignableScopes(data, city, 'SCHOOL_ADMIN').map((x) => x.id).sort()).toEqual(['sA1', 'sA2', 'sA3', 'sA4'])
+    // 署管理員：只有署轄學校（國立、海外臺校、非直轄市私立高中）
+    const neaList = assignableScopes(data, nea, 'SCHOOL_ADMIN')
+    expect(neaList.map((x) => x.id)).toContain('sN1')
+    expect(neaList.every((x) => x.ntaDirect)).toBe(true)
+    // 新北市承辦：新北市的非署轄學校（含四所示範學校），不含署轄的國立華僑高中
+    const cityList = assignableScopes(data, city, 'SCHOOL_ADMIN')
+    expect(cityList.map((x) => x.id)).toEqual(expect.arrayContaining(['sA1', 'sA2', 'sA3', 'sA4']))
+    expect(cityList.every((x) => !x.ntaDirect && x.school?.city === '新北市')).toBe(true)
     expect(assignmentDenial(data, nea, 'SCHOOL_ADMIN', 'sA1')).toBe('SCHOOL_ADMIN_RULE')
     expect(assignmentDenial(data, city, 'SCHOOL_ADMIN', 'sN1')).toBe('SCHOOL_ADMIN_RULE')
     expect(assignmentDenial(data, school, 'SCHOOL_ADMIN', 'sA1')).toBe('SCHOOL_ADMIN_RULE')

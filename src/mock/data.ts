@@ -5,38 +5,78 @@ import { DEFAULT_PROFILE_SETTINGS, guidOf, idHash, makeTestId, maskId } from '..
 
 /* 全部為合成資料：組織、學校、人名皆為虛構，不含任何真實帳號或個資。 */
 
-const sc = (id: string, parentId: string | null, type: ScopeNode['type'], name: string, path: string, stages?: Stage[], areaId?: string): ScopeNode =>
-  ({ id, parentId, type, name, path, stages, areaId })
+import seed from './moeSeed.json'
+import type { SchoolLevel } from '../schools/moe'
+import { createSchoolNode } from '../schools/schoolData'
 
-export const SCOPES: ScopeNode[] = [
-  sc('nea', null, 'ROOT', '國教署', '/nea'),
-  sc('cityA', 'nea', 'CITY', '甲市教育局', '/nea/cityA'),
-  sc('cityA-d1', 'cityA', 'DISTRICT', '甲市第一分區', '/nea/cityA/cityA-d1'),
-  sc('cityA-d2', 'cityA', 'DISTRICT', '甲市第二分區', '/nea/cityA/cityA-d2'),
-  sc('sA1', 'cityA-d1', 'SCHOOL', '甲市光明國小', '/nea/cityA/cityA-d1/sA1', ['國小'], 'arA1'),
-  sc('sA2', 'cityA-d1', 'SCHOOL', '甲市和平國中', '/nea/cityA/cityA-d1/sA2', ['國中'], 'arA2'),
-  sc('sA3', 'cityA-d2', 'SCHOOL', '甲市文華高職', '/nea/cityA/cityA-d2/sA3', ['高中職'], 'arA3'),
-  sc('sA4', 'cityA-d2', 'SCHOOL', '甲市青山國小', '/nea/cityA/cityA-d2/sA4', ['國小'], 'arA4'),
-  { ...sc('sN1', 'nea', 'SCHOOL', '國立示範高中（署轄）', '/nea/sN1', ['高中職']), ntaDirect: true },
-  sc('cityB', 'nea', 'CITY', '乙縣教育處', '/nea/cityB'),
-  sc('cityB-d1', 'cityB', 'DISTRICT', '乙縣第一分區', '/nea/cityB/cityB-d1'),
-  sc('sB1', 'cityB-d1', 'SCHOOL', '乙縣海岸國小', '/nea/cityB/cityB-d1/sB1', ['國小'], 'arB1'),
-  sc('sB2', 'cityB-d1', 'SCHOOL', '乙縣山林國中', '/nea/cityB/cityB-d1/sB2', ['國中'], 'arB2'),
-  sc('cityC', 'nea', 'CITY', '丙市教育局', '/nea/cityC'),
-  sc('cityC-d1', 'cityC', 'DISTRICT', '丙市第一分區', '/nea/cityC/cityC-d1'),
-  sc('sC1', 'cityC-d1', 'SCHOOL', '丙市河畔國小', '/nea/cityC/cityC-d1/sC1', ['國小'], 'arC1'),
-]
+/*
+ * 學校、縣市、鄉鎮市區：教育部統計處 114 學年度各級學校名錄（真實學校代碼與資料，見 moeSeed.json）。
+ * 人員、帳號、學生：全部為合成資料，不含任何真實帳號或個資。
+ * 分區的實際組成尚未取得：新北市、臺中市各示範兩個分區，其餘縣市先以「全區」一個分區呈現。
+ */
 
-/** 分區 = 多個行政區／鄉鎮；同一縣市內，一個行政區／鄉鎮只能屬於一個分區 */
-export const AREAS: AdminArea[] = [
-  { id: 'arA1', name: '甲市東區', cityId: 'cityA', districtId: 'cityA-d1' },
-  { id: 'arA2', name: '甲市北區', cityId: 'cityA', districtId: 'cityA-d1' },
-  { id: 'arA3', name: '甲市南區', cityId: 'cityA', districtId: 'cityA-d2' },
-  { id: 'arA4', name: '甲市西區', cityId: 'cityA', districtId: 'cityA-d2' },
-  { id: 'arB1', name: '乙縣海岸鄉', cityId: 'cityB', districtId: 'cityB-d1' },
-  { id: 'arB2', name: '乙縣山林鎮', cityId: 'cityB', districtId: 'cityB-d1' },
-  { id: 'arC1', name: '丙市河畔區', cityId: 'cityC', districtId: 'cityC-d1' },
-]
+const DIRECT = ['臺北市', '新北市', '桃園市', '臺中市', '臺南市', '高雄市']
+const BUREAU = (c: string) => `${c}政府${DIRECT.includes(c) ? '教育局' : '教育處'}`
+/** 示範用的縣市 id（沿用原型既有 id，測試與示範帳號以此為準） */
+const CITY_ID: Record<string, string> = { 新北市: 'cityA', 臺中市: 'cityB', 臺北市: 'cityC' }
+/** 示範分區（待各縣市提供實際組成）：未列出的鄉鎮市區歸入該縣市最後一個分區 */
+const DEMO_DISTRICTS: Record<string, { id: string; name: string; towns: string[] }[]> = {
+  新北市: [
+    { id: 'cityA-d1', name: '新北市第一分區（示範）', towns: ['板橋區', '中和區', '永和區', '土城區', '樹林區', '三峽區', '鶯歌區', '新店區', '深坑區', '石碇區', '坪林區', '烏來區'] },
+    { id: 'cityA-d2', name: '新北市第二分區（示範）', towns: [] },
+  ],
+  臺中市: [
+    { id: 'cityB-d1', name: '臺中市第一分區（示範）', towns: ['中區', '東區', '南區', '西區', '北區', '西屯區', '南屯區', '北屯區'] },
+    { id: 'cityB-d2', name: '臺中市第二分區（示範）', towns: [] },
+  ],
+}
+/** 示範帳號、學生所在的學校（真實學校代碼）→ 原型既有 id */
+export const DEMO_SCHOOL_IDS: Record<string, string> = {
+  '014601': 'sA1', // 新北市板橋區 市立板橋國小（第一分區）
+  '014518': 'sA2', // 新北市中和區 市立中和國中（第一分區）
+  '014311': 'sA3', // 新北市三重區 市立三重高中（第二分區）
+  '014754': 'sA4', // 新北市三重區 市立三重國小（第二分區）
+  '010301': 'sN1', // 國立華僑高級中等學校（署轄）
+  '193610': 'sB1', // 臺中市西區 市立大同國小
+  '193502': 'sB2', // 臺中市北區 市立雙十國中
+  '353601': 'sC1', // 臺北市中正區 市立螢橋國小
+}
+
+type SeedRow = [string, string, string, string, string, string, string, string, string, string, number]
+const SEED = seed as unknown as { year: number; rows: SeedRow[] }
+export const SEED_YEAR = SEED.year
+
+/** 依名錄建立：國教署 › 縣市 › 分區（＋鄉鎮市區）› 學校 */
+export function buildSchoolTree(): { scopes: ScopeNode[]; areas: AdminArea[] } {
+  const scopes: ScopeNode[] = [{ id: 'nea', parentId: null, type: 'ROOT', name: '國教署', path: '/nea' }]
+  const areas: AdminArea[] = []
+  const rows = SEED.rows
+  const cities = [...new Set(rows.map((r) => r[3]).filter((c) => c && c !== '海外'))]
+  for (const c of cities) {
+    const id = CITY_ID[c] ?? `city-${c}`
+    scopes.push({ id, parentId: 'nea', type: 'CITY', name: BUREAU(c), path: `/nea/${id}`, cityName: c })
+    const towns = [...new Set(rows.filter((r) => r[3] === c && r[4]).map((r) => r[4]))].sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+    const ds = DEMO_DISTRICTS[c] ?? [{ id: `${id}-d0`, name: `${c}全區`, towns: [] }]
+    for (const d of ds) scopes.push({ id: d.id, parentId: id, type: 'DISTRICT', name: d.name, path: `/nea/${id}/${d.id}` })
+    for (const t of towns) {
+      const d = ds.find((x) => x.towns.includes(t)) ?? ds[ds.length - 1]
+      areas.push({ id: `ar-${c}-${t}`, name: `${c}${t}`, cityId: id, districtId: d.id })
+    }
+  }
+  const tmp = { scopes, areas, schoolImports: [] } as unknown as RbacData
+  for (const r of rows) {
+    const [code, name, ownership, city, town, zip, address, phone, website, levels, preparing] = r
+    createSchoolNode(tmp, { code, name, ownership: ownership as '公立' | '私立' | '', city, town, zip, address, phone, website, levels: levels.split(',') as SchoolLevel[], ...(preparing ? { preparing: true } : {}) },
+      SEED.year, '系統初始化', '2025-08-01', DEMO_SCHOOL_IDS[code])
+  }
+  return { scopes, areas }
+}
+
+const TREE = buildSchoolTree()
+export const SCOPES: ScopeNode[] = TREE.scopes
+export const AREAS: AdminArea[] = TREE.areas
+const cloneScope = (x: ScopeNode): ScopeNode => ({ ...x, stages: x.stages ? [...x.stages] : undefined,
+  school: x.school ? { ...x.school, levels: [...x.school.levels], history: [...x.school.history], contact: x.school.contact ? { ...x.school.contact } : undefined } : undefined })
 
 /** 動作字母：C 新增 R 查詢 U 修改 D 刪除 A 審核 E 匯出。權限＝模組 × 動作，示範值待業務核准。 */
 export const ROLES: Role[] = [
@@ -103,9 +143,9 @@ export const ACCOUNTS: Account[] = [
   { id: 'a09', username: 'sa2_admin', name: '周校管', email: 'a09@example.test', status: 'active', note: '角色指派已到期' },
   { id: 'a10', username: 'sb1_admin', name: '鄭停用', email: 'a10@example.test', status: 'locked', note: '帳號已鎖定' },
   { id: 'a12', username: 'sn1_staff', name: '謝署轄', email: 'a12@example.test', status: 'active', note: '署轄學校新進人員，尚未指派學校管理員。示範：教育雲端未提供 guid，自填身分證需管理員核對' },
-  { id: 'a13', username: 'multi_teacher', name: '蔡兼課', email: 'a13@example.test', status: 'active', note: '示範：本職為甲市第一國小特教教師；同校另有學校管理員角色（長期有效）；借調甲市第二國小特教教師（外部單位，有效期間）' },
-  { id: 'a14', username: 'sso_new_teacher', name: '孫首登', email: 'a14@example.test', status: 'active', note: '示範（教育雲端登入）：首次登入的新使用者，教育雲端帶學校代碼（甲市第一國小），系統建立任職機構，預設不指派角色' },
-  { id: 'a15', username: 'sso_moved_teacher', name: '何調校', email: 'a15@example.test', status: 'active', note: '示範（教育雲端登入）：系統記錄任職於甲市第二國小並有教師角色，但教育雲端回傳學校代碼為甲市第三國小 → 清空原角色，改任第三國小、無角色' },
+  { id: 'a13', username: 'multi_teacher', name: '蔡兼課', email: 'a13@example.test', status: 'active', note: '示範：本職為新北市板橋國小特教教師；同校另有學校管理員角色（長期有效）；借調新北市中和國中特教教師（外部單位，有效期間）' },
+  { id: 'a14', username: 'sso_new_teacher', name: '孫首登', email: 'a14@example.test', status: 'active', note: '示範（教育雲端登入）：首次登入的新使用者，教育雲端帶學校代碼（新北市板橋國小），系統建立任職機構，預設不指派角色' },
+  { id: 'a15', username: 'sso_moved_teacher', name: '何調校', email: 'a15@example.test', status: 'active', note: '示範（教育雲端登入）：系統記錄任職於新北市中和國中並有教師角色，但教育雲端回傳學校代碼為新北市三重高中 → 清空原角色，改任三重高中、無角色' },
   { id: 'a11', username: 'sa1_teacher02', name: '許新進', email: 'a11@example.test', status: 'active', note: `新進教師，尚未指派角色。示範：教育雲端會回傳 guid，對應身分證 ${DEMO_ID_A11}；填其他號碼會被擋下` },
 ]
 
@@ -164,7 +204,8 @@ const GRADES: Record<Stage, string[]> = {
 function buildStudents(): Student[] {
   const out: Student[] = []
   let n = 0
-  for (const s of SCOPES.filter((x) => x.type === 'SCHOOL')) {
+  // 只為示範帳號所在的學校產生合成學生
+  for (const s of Object.values(DEMO_SCHOOL_IDS).map((id) => SCOPES.find((x) => x.id === id)!)) {
     const stage = s.stages![0]
     for (let k = 0; k < 4; k++, n++) {
       out.push({
@@ -196,8 +237,8 @@ function seedAccount(a: Account, idx: number): Account {
 
 export function createRbacData(): RbacData {
   return {
-    scopes: SCOPES,
-    areas: AREAS,
+    scopes: SCOPES.map(cloneScope),
+    areas: AREAS.map((a) => ({ ...a })),
     // 角色範本可被署管理員修改：每份資料各自複製，避免改到常數
     roles: ROLES.map((r) => ({ ...r, grants: { ...r.grants } })),
     accounts: ACCOUNTS.map(seedAccount),
@@ -207,6 +248,7 @@ export function createRbacData(): RbacData {
     responsibilities: RESPONSIBILITIES,
     profileSettings: { ...DEFAULT_PROFILE_SETTINGS, contactFields: [...DEFAULT_PROFILE_SETTINGS.contactFields] },
     ssoGuids: { a11: guidOf(DEMO_ID_A11) },
+    schoolImports: [{ id: 1, at: '2025-08-01', by: '系統初始化', year: SEED_YEAR, levels: [...new Set(SEED.rows.flatMap((r) => r[9].split(',')))] as SchoolLevel[], files: ['教育部統計處 114 學年度各級學校名錄'], summary: { new: SEED.rows.length } }],
     ssoProfiles: { a14: { schoolIds: ['sA1'], jobTitle: '特教教師' }, a15: { schoolIds: ['sA3'], jobTitle: '特教教師' } },
   }
 }
