@@ -5,8 +5,8 @@
  * 同一代碼可能出現在多個名錄（例如高中附設國中部、國小部共用代碼），合併時以代碼為準、學制取聯集。
  */
 
-export type SchoolLevel = '學前' | '國小' | '國中' | '國中小進修部' | '高中職' | '特殊教育學校' | '海外臺校' | '實驗教育機構'
-export const SCHOOL_LEVELS: SchoolLevel[] = ['學前', '國小', '國中', '國中小進修部', '高中職', '特殊教育學校', '海外臺校', '實驗教育機構']
+export type SchoolLevel = '幼兒園' | '互助教保服務中心' | '國小' | '國中' | '國中小進修部' | '高中職' | '特殊教育學校' | '海外臺校' | '實驗教育機構'
+export const SCHOOL_LEVELS: SchoolLevel[] = ['幼兒園', '互助教保服務中心', '國小', '國中', '國中小進修部', '高中職', '特殊教育學校', '海外臺校', '實驗教育機構']
 
 export interface MoeSchool {
   code: string
@@ -25,8 +25,13 @@ export interface MoeSchool {
   isNew?: boolean
   /** 只出現在「附設國中／國小部」名錄 */
   attachedOnly?: boolean
+  /** 分班（幼兒園的分班代碼為「母園代碼-01」）：併入母園，不另成機構 */
+  branches?: MoeBranch[]
   note?: string
 }
+
+export interface MoeBranch { code: string; name: string; town: string; address: string; phone: string }
+export const BRANCH_RE = /^([0-9A-Z]{6})-(\d{2})$/
 
 export type MoeChangeKind = '新設' | '復校' | '改制' | '停辦' | '停招' | '其他'
 export interface MoeChange {
@@ -41,6 +46,8 @@ export interface MoeChange {
 export type MoeFileKind = 'list' | 'newList' | 'change' | 'outOfScope' | 'unknown'
 export interface MoeFile {
   fileName: string
+  /** 分班列（併入母園） */
+  branches?: (MoeBranch & { parent: string })[]
   title: string
   year: number | null
   kind: MoeFileKind
@@ -78,7 +85,9 @@ function detect(title: string): { kind: MoeFileKind; level?: SchoolLevel } {
   if (/異動一覽表/.test(title)) return { kind: 'change' }
   if (/新設校/.test(title) || /籌備處/.test(title)) return { kind: 'newList', level: /高級中等/.test(title) ? '高中職' : undefined }
   if (/大專校院|宗教研修|空大|附設進修學校|軍警大專/.test(title)) return { kind: 'outOfScope' }
-  if (/幼兒園/.test(title)) return { kind: 'list', level: '學前' }
+  // 學前教保服務機構（統計處 k1 幼兒園、k2 互助教保服務中心）
+  if (/互助教保服務中心/.test(title)) return { kind: 'list', level: '互助教保服務中心' }
+  if (/幼兒園/.test(title)) return { kind: 'list', level: '幼兒園' }
   if (/國民中小學進修部/.test(title)) return { kind: 'list', level: '國中小進修部' }
   if (/國民小學/.test(title)) return { kind: 'list', level: '國小' }
   if (/國民中學/.test(title)) return { kind: 'list', level: '國中' }
@@ -94,6 +103,7 @@ const HEADERS: Record<string, string[]> = {
   name: ['學校名稱', '機構名稱'],
   ownership: ['公/私立', '公私立'],
   city: ['縣市名稱', '縣市'],
+  town: ['鄉鎮市區名稱'],
   address: ['地址', '學校地址'],
   phone: ['電話'],
   website: ['網址'],
@@ -156,6 +166,13 @@ export function parseMoeSheet(rows: Cell[][], fileName = ''): MoeFile {
     if (!name) continue
     const code = normCode(get(r, 'code'))
     if (out.kind === 'newList' && /^「|擬奉核可/.test(s(r[0]) || name)) continue
+    const br = code.match(BRANCH_RE)
+    if (br) {
+      const city = get(r, 'city').replace(/^\[\w+\]/, '').replace(/^台/, '臺')
+      const address = get(r, 'address').replace(/^\[\d+\]/, '').trim()
+      ;(out.branches ??= []).push({ parent: br[1], code, name, address, phone: get(r, 'phone'), town: get(r, 'town').replace(/\s/g, '') || townOf(city, address) })
+      continue
+    }
     if (!CODE_RE.test(code)) {
       out.skipped.push({ name, reason: /籌備處/.test(name) ? '籌備處尚無學校代碼，不匯入' : `學校代碼「${code || '空白'}」格式不正確` })
       continue
@@ -174,7 +191,7 @@ export function parseMoeSheet(rows: Cell[][], fileName = ''): MoeFile {
       code,
       name: out.kind === 'newList' ? name.replace(/\((新設校|籌備處)\)$/, (_m, x: string) => (x === '籌備處' ? '籌備處' : '')) : name,
       ownership: own === '公立' || own === '私立' ? own : /^(國立|市立|縣立)/.test(name) || /^(國立|市立|縣立)/.test(name.replace(/^.{2,3}[市縣]/, '')) ? '公立' : /私立/.test(name) ? '私立' : '',
-      city, zip, address, town: townOf(city, address),
+      city, zip, address, town: get(r, 'town').replace(/\s/g, '') || townOf(city, address),
       phone: get(r, 'phone'), website: get(r, 'website'),
       levels: [level],
       ...(preparing ? { preparing } : {}),
@@ -219,6 +236,14 @@ export function mergeMoe(files: MoeFile[]): MoeBatch {
       for (const k of ['address', 'phone', 'website', 'town', 'zip', 'city', 'ownership'] as const) if (!cur[k] && sc[k]) cur[k] = sc[k] as never
     }
   }
+  // 分班併入母園
+  for (const b of files.flatMap((f) => f.branches ?? [])) {
+    const p = byCode.get(b.parent)
+    if (!p) { warnings.push(`分班 ${b.code} ${b.name}：找不到母園 ${b.parent}，未匯入`); continue }
+    const { parent: _p, ...rest } = b
+    ;(p.branches ??= []).push(rest)
+  }
+  for (const sc of byCode.values()) sc.branches?.sort((a, b) => a.code.localeCompare(b.code))
   for (const f of files) if (f.kind === 'unknown') warnings.push(`無法辨識的檔案：${f.fileName || f.title || '(無標題)'}，未匯入`)
   for (const sc of byCode.values()) {
     sc.levels.sort((a, b) => SCHOOL_LEVELS.indexOf(a) - SCHOOL_LEVELS.indexOf(b))
@@ -239,7 +264,7 @@ export function mergeMoe(files: MoeFile[]): MoeBatch {
 export function stagesOf(levels: SchoolLevel[]): ('學前' | '國小' | '國中' | '高中職')[] {
   const out = new Set<'學前' | '國小' | '國中' | '高中職'>()
   for (const l of levels) {
-    if (l === '學前') out.add('學前')
+    if (l === '幼兒園' || l === '互助教保服務中心') out.add('學前')
     if (l === '國小') out.add('國小')
     if (l === '國中' || l === '國中小進修部') out.add('國中')
     if (l === '高中職') out.add('高中職')

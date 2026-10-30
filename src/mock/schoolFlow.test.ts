@@ -35,6 +35,8 @@ describe('學校自行維護：電話、校長、發言人（聯絡人）', () =
     const d = await call('/schools/sA1', 'GET', SCHOOL)
     expect(d.json).toMatchObject({ canEditSelf: true, canManage: false })
     expect(d.json!.history[0].text).toContain('校長')
+    expect(d.json!.lastChange).toMatchObject({ kind: 'school', action: 'update' })
+    expect(d.json!.import).toMatchObject({ id: 1, year: 114 })
   })
   it('學校管理員不能改他校，也不能改名錄欄位或新增學校', async () => {
     expect((await call('/schools/sA2/self', 'PUT', SCHOOL, self)).status).toBe(403)
@@ -65,6 +67,7 @@ describe('署管理員：新增、修改', () => {
     const r = await call('/schools', 'POST', NEA, body)
     expect(r.status).toBe(201)
     expect(r.json).toMatchObject({ status: 'preparing', source: 'manual', district: '新北市第一分區（示範）' })
+    expect(r.json).toMatchObject({ importId: null, lastChange: { kind: 'manual', action: 'create' } })
     expect((await call('/schools', 'POST', NEA, body)).status).toBe(400)
   })
 })
@@ -78,10 +81,25 @@ describe('學校改過的電話，名錄匯入不覆寫', () => {
     sA1.school!.phoneBySchool = true
     const it = previewImport(db, batch).items.find((i) => i.code === '014601')
     expect(it?.fields.some((f) => f.key === 'phone') ?? false).toBe(false)
-    applyImport(db, batch, {}, '王署管', '2026-08-05')
+    applyImport(db, batch, {}, '王署管', '2026-08-05', 2)
     expect(sA1.school!.phone).toBe('(02)0000-0000')
     // 沒被學校改過的學校，電話仍以名錄為準
     const other = db.scopes.find((x) => x.id === 'sA4')!
     expect(other.school!.phoneBySchool).toBeUndefined()
+  })
+})
+
+describe('分班可選為本職機構', () => {
+  it('署管理員可為帳號新增分班的任職身分並指派角色', async () => {
+    const br = db.scopes.find((x) => x.school?.code === '011XA8-01')!
+    const idn = await call('/admin/identities', 'POST', NEA, { accountId: 'a11', orgScopeId: br.id, jobTitle: '教保員' })
+    expect(idn.status).toBe(201)
+    const ov = await call('/admin/overview', 'GET', NEA)
+    expect(ov.json!.scopes.some((x: { id: string }) => x.id === br.id)).toBe(true)
+  })
+  it('分班清單顯示所屬分區（同母園）', async () => {
+    const r = await call('/schools', 'GET', NEA)
+    const row = r.json!.rows.find((x: { code: string }) => x.code === '011XA8-01')
+    expect(row).toMatchObject({ branchOf: '011XA8', district: '新北市第一分區（示範）' })
   })
 })

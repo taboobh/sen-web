@@ -308,12 +308,16 @@ export function RoleMatrixView() {
   const [editing, setEditing] = useState<Role | null>(null)
   return (
     <Gate data={data} err={err}>{(d) => {
+      // 全國一萬多個機構：先建立「上層 → 子節點」與行政區索引，避免每個節點都掃描全部
+      const kids = new Map<string | null, ScopeNode[]>()
+      for (const s of d.scopes) kids.set(s.parentId, [...(kids.get(s.parentId) ?? []), s])
+      const areaName = new Map(d.areas.map((a) => [a.id, a.name]))
       const tree = (parent: string | null): DataNode[] =>
-        d.scopes.filter((s) => s.parentId === parent).map((s) => ({
+        (kids.get(parent) ?? []).map((s) => ({
           key: s.id,
           title: s.type === 'DISTRICT'
             ? `${s.name}（DISTRICT）涵蓋：${d.areas.filter((a) => a.districtId === s.id).map((a) => a.name).join('、')}`
-            : s.type === 'SCHOOL' ? `${s.schoolCode ?? ''} ${s.name}（${d.areas.find((a) => a.id === s.areaId)?.name ?? '未指定行政區'}${s.schoolStatus && s.schoolStatus !== 'active' ? `・${SCHOOL_STATUS_TEXT[s.schoolStatus]}` : ''}）` : `${s.name}（${s.type}）`,
+            : s.type === 'SCHOOL' ? `${s.schoolCode ?? ''} ${s.name}（${(s.areaId && areaName.get(s.areaId)) || '未指定行政區'}${s.schoolStatus && s.schoolStatus !== 'active' ? `・${SCHOOL_STATUS_TEXT[s.schoolStatus]}` : ''}）` : `${s.name}（${s.type}）`,
           children: tree(s.id),
         }))
       return (

@@ -45,7 +45,11 @@ export function schoolStages(levels: SchoolLevel[], name: string) {
 const pathOf = (data: RbacData, parentId: string, id: string) => `${data.scopes.find((x) => x.id === parentId)!.path}/${id}`
 
 /** 依名錄資料建立學校節點（不檢查重複；呼叫端負責） */
-export function createSchoolNode(data: RbacData, m: MoeSchool, year: number | null, by: string, now: string, id = `s${m.code}`, status?: SchoolStatus): ScopeNode {
+/** 匯入（importId 有值）或手動新增（importId 為 null）的來源資訊 */
+export interface ChangeCtx { year: number | null; by: string; now: string; importId: number | null }
+
+export function createSchoolNode(data: RbacData, m: MoeSchool, ctx: ChangeCtx, id = `s${m.code}`, status?: SchoolStatus): ScopeNode {
+  const { year, by, now, importId } = ctx
   const place = placeSchool(data, m)
   const st: SchoolStatus = status ?? (m.preparing ? 'preparing' : 'active')
   const node: ScopeNode = {
@@ -53,20 +57,88 @@ export function createSchoolNode(data: RbacData, m: MoeSchool, year: number | nu
     stages: schoolStages(m.levels, m.name), areaId: place.areaId, ...(place.ntaDirect ? { ntaDirect: true } : {}),
     school: {
       code: m.code, levels: [...m.levels], ownership: m.ownership, city: m.city, town: m.town, zip: m.zip, address: m.address,
-      phone: m.phone, website: m.website, status: st, statusSince: now, moeYear: year, source: 'moe',
+      phone: m.phone, website: m.website, ...(m.branches?.length ? { branches: m.branches.map((b) => ({ ...b })) } : {}), status: st, statusSince: now, moeYear: year, source: importId === null ? 'manual' : 'moe', importId,
+      lastChange: importId === null ? { kind: 'manual', action: 'create', at: now, by, fields: [] } : { kind: 'import', importId, year, at: now, by },
       history: [{ at: now, by, text: `${year ?? ''}學年度名錄匯入建立（${SCHOOL_STATUS_TEXT[st]}）` }],
     },
   }
   data.scopes.push(node)
+  syncBranches(data, node, ctx)
   return node
+}
+
+const DIRECT_CHILD_PATH = (parent: ScopeNode, id: string) => `${parent.path}/${id}`
+/** 節點移動後，更新其下（分班）節點的路徑 */
+function repathChildren(data: RbacData, node: ScopeNode) {
+  for (const c of data.scopes.filter((x) => x.parentId === node.id)) { c.path = DIRECT_CHILD_PATH(node, c.id); repathChildren(data, c) }
+}
+const counts2 = (data: RbacData, id: string) =>
+  data.students.filter((s) => s.schoolId === id).length + data.identities.filter((i) => i.orgScopeId === id && i.status !== 'ended').length
+
+/**
+ * 分班：母園之下的獨立機構節點（可選為本職機構、指派角色範圍）。依母園名錄的分班清單建立、更新；
+ * 名錄不再列出的分班：無人員與學生→廢校／停辦，否則→停招。母園廢校時分班一併廢校。
+ */
+export function syncBranches(data: RbacData, main: ScopeNode, ctx: ChangeCtx): string[] {
+  const sc = main.school!
+  const out: string[] = []
+  const listed = sc.branches ?? []
+  const existing = data.scopes.filter((x) => x.parentId === main.id && x.school?.branchOf)
+  const stamp = (n: ScopeNode, text: string) => {
+    n.school!.history.unshift({ at: ctx.now, by: ctx.by, text })
+    n.school!.lastChange = ctx.importId === null ? { kind: 'manual', action: 'update', at: ctx.now, by: ctx.by, fields: [] } : { kind: 'import', importId: ctx.importId, year: ctx.year, at: ctx.now, by: ctx.by }
+    out.push(`${n.school!.code} ${text}`)
+  }
+  for (const b of listed) {
+    const cur = existing.find((x) => x.school!.code === b.code)
+    const status: SchoolStatus = sc.status === 'closed' ? 'closed' : sc.status
+    if (!cur) {
+      const id = `s${b.code}`
+      const city = data.scopes.find((x) => x.type === 'CITY' && x.cityName === sc.city)
+      const area = city ? areaOf(data, city.id, b.town) : undefined
+      const n: ScopeNode = {
+        id, parentId: main.id, type: 'SCHOOL', name: b.name, path: DIRECT_CHILD_PATH(main, id), stages: [...(main.stages ?? [])], areaId: area?.id ?? main.areaId,
+        ...(main.ntaDirect ? { ntaDirect: true } : {}),
+        school: {
+          code: b.code, branchOf: sc.code, levels: [...sc.levels], ownership: sc.ownership, city: sc.city, town: b.town, zip: '', address: b.address, phone: b.phone, website: '',
+          status, statusSince: ctx.now, moeYear: ctx.year, source: sc.source, importId: ctx.importId,
+          lastChange: ctx.importId === null ? { kind: 'manual', action: 'create', at: ctx.now, by: ctx.by, fields: [] } : { kind: 'import', importId: ctx.importId, year: ctx.year, at: ctx.now, by: ctx.by },
+          history: [{ at: ctx.now, by: ctx.by, text: `${ctx.year ?? ''}學年度名錄匯入建立（${main.name} 的分班）` }],
+        },
+      }
+      data.scopes.push(n)
+      if (existing.length || sc.history.length > 1) out.push(`${b.code} 新增分班`)
+      continue
+    }
+    const c = cur.school!
+    const diffs = [cur.name !== b.name && `名稱 ${cur.name}→${b.name}`, c.address !== b.address && `地址 ${c.address}→${b.address}`,
+      !c.phoneBySchool && c.phone !== b.phone && `電話 ${c.phone}→${b.phone}`].filter(Boolean) as string[]
+    if (cur.name !== b.name) c.oldNames = [...(c.oldNames ?? []), cur.name]
+    cur.name = b.name; c.address = b.address; c.town = b.town; if (!c.phoneBySchool) c.phone = b.phone
+    c.moeYear = ctx.year; c.importId = ctx.importId ?? c.importId
+    if (c.status === 'closed' && sc.status !== 'closed') { c.status = sc.status; c.statusSince = ctx.now; diffs.push('名錄再次列出，恢復') }
+    if (diffs.length) stamp(cur, diffs.join('；'))
+  }
+  for (const n of existing) {
+    const c = n.school!
+    if (c.status === 'closed') continue
+    if (sc.status === 'closed') { c.status = 'closed'; c.statusSince = ctx.now; c.statusNote = '母園廢校／停辦'; stamp(n, '母園廢校／停辦，分班一併設為廢校／停辦'); continue }
+    if (listed.some((b) => b.code === c.code)) continue
+    const st: SchoolStatus = counts2(data, n.id) > 0 ? 'closing' : 'closed'
+    c.status = st; c.statusSince = ctx.now; c.statusNote = '名錄未再列出此分班'
+    stamp(n, `名錄未再列出此分班，設為${SCHOOL_STATUS_TEXT[st]}`)
+  }
+  return out
 }
 
 /** 名錄欄位（匯入時以名錄為準覆寫）；在地欄位（特教窗口、備註）不受匯入影響 */
 export const MOE_FIELDS: { key: keyof SchoolInfo | 'name'; label: string }[] = [
   { key: 'name', label: '校名' }, { key: 'levels', label: '學制' }, { key: 'ownership', label: '公私立' }, { key: 'city', label: '縣市' },
-  { key: 'town', label: '鄉鎮市區' }, { key: 'zip', label: '郵遞區號' }, { key: 'address', label: '地址' }, { key: 'phone', label: '電話' }, { key: 'website', label: '網址' },
+  { key: 'town', label: '鄉鎮市區' }, { key: 'zip', label: '郵遞區號' }, { key: 'address', label: '地址' }, { key: 'phone', label: '電話' }, { key: 'website', label: '網址' }, { key: 'branches', label: '分班' },
 ]
-const show = (v: unknown) => Array.isArray(v) ? v.join('、') : String(v ?? '')
+const show = (v: unknown) => Array.isArray(v)
+  ? v.map((x) => typeof x === 'object' && x ? `${(x as { code: string }).code} ${(x as { name: string }).name}｜${(x as { address: string }).address}｜${(x as { phone: string }).phone}` : String(x)).join('、')
+  : String(v ?? '')
 
 function fieldDiff(node: ScopeNode, m: MoeSchool) {
   const sc = node.school!
@@ -125,9 +197,10 @@ export interface ImportPreview {
 }
 
 /** 第一階段納入的學制（大專不納入） */
-export const IN_SCOPE_LEVELS: SchoolLevel[] = ['學前', '國小', '國中', '國中小進修部', '高中職', '特殊教育學校', '海外臺校', '實驗教育機構']
+export const IN_SCOPE_LEVELS: SchoolLevel[] = ['幼兒園', '互助教保服務中心', '國小', '國中', '國中小進修部', '高中職', '特殊教育學校', '海外臺校', '實驗教育機構']
 
-const schoolsOf = (data: RbacData) => data.scopes.filter((x) => x.type === 'SCHOOL' && x.school)
+/** 名錄比對的對象：各校（母園）；分班隨母園的分班清單處理 */
+const schoolsOf = (data: RbacData) => data.scopes.filter((x) => x.type === 'SCHOOL' && x.school && !x.school.branchOf)
 
 function counts(data: RbacData, schoolId: string) {
   return {
@@ -214,16 +287,18 @@ export function previewImport(data: RbacData, batch: MoeBatch): ImportPreview {
 function applyFields(data: RbacData, node: ScopeNode, m: MoeSchool) {
   const sc = node.school!
   if (node.name !== m.name) { sc.oldNames = [...(sc.oldNames ?? []), node.name]; node.name = m.name }
-  Object.assign(sc, { levels: [...m.levels], ownership: m.ownership || sc.ownership, city: m.city || sc.city, town: m.town || sc.town, zip: m.zip || sc.zip, address: m.address || sc.address, phone: sc.phoneBySchool ? sc.phone : m.phone || sc.phone, website: m.website || sc.website })
+  Object.assign(sc, { levels: [...m.levels], ownership: m.ownership || sc.ownership, city: m.city || sc.city, town: m.town || sc.town, zip: m.zip || sc.zip, address: m.address || sc.address, phone: sc.phoneBySchool ? sc.phone : m.phone || sc.phone, website: m.website || sc.website, branches: m.branches?.length ? m.branches.map((b) => ({ ...b })) : undefined })
   node.stages = schoolStages(sc.levels, node.name)
   const place = placeSchool(data, { ...m, town: sc.town, city: sc.city })
   node.areaId = place.areaId
   node.ntaDirect = place.ntaDirect || undefined
-  if (place.parentId !== node.parentId) { node.parentId = place.parentId; node.path = pathOf(data, place.parentId, node.id) }
+  if (place.parentId !== node.parentId) { node.parentId = place.parentId; node.path = pathOf(data, place.parentId, node.id); repathChildren(data, node) }
 }
 
 /** 套用：依每一項的處理方式更新學校主檔，回傳各類件數（稽核用）。未列在 decisions 者採建議值 */
-export function applyImport(data: RbacData, batch: MoeBatch, decisions: Record<string, ImportDecision>, by: string, now: string) {
+export function applyImport(data: RbacData, batch: MoeBatch, decisions: Record<string, ImportDecision>, by: string, now: string, importId: number) {
+  const ctx: ChangeCtx = { year: batch.year, by, now, importId }
+  const stamp = (node: ScopeNode) => { node.school!.lastChange = { kind: 'import', importId, year: batch.year, at: now, by } }
   const pv = previewImport(data, batch)
   const inBatch = new Map(batch.schools.map((s) => [s.code, s]))
   const done: Record<string, number> = {}
@@ -233,6 +308,7 @@ export function applyImport(data: RbacData, batch: MoeBatch, decisions: Record<s
     if (node.school!.status === st) return
     log(node, `狀態 ${SCHOOL_STATUS_TEXT[node.school!.status]}→${SCHOOL_STATUS_TEXT[st]}（${why}）`)
     node.school!.status = st; node.school!.statusSince = now; node.school!.statusNote = why
+    if (st === 'closed') syncBranches(data, node, ctx)
   }
   for (const it of pv.items) {
     const d = decisions[it.key] ?? it.suggestion
@@ -241,11 +317,11 @@ export function applyImport(data: RbacData, batch: MoeBatch, decisions: Record<s
     const m = inBatch.get(it.code)
     const node = data.scopes.find((x) => x.id === it.schoolId)
     const yr = `${batch.year ?? ''}學年度名錄`
-    if (it.kind === 'new' || it.kind === 'preparing') { createSchoolNode(data, m!, batch.year, by, now); bump(it.kind); continue }
+    if (it.kind === 'new' || it.kind === 'preparing') { createSchoolNode(data, m!, ctx); bump(it.kind); continue }
     if (!node) continue
     if (it.kind === 'missing') {
       if (d === 'keep') { log(node, `${yr}未列，維持${SCHOOL_STATUS_TEXT[node.school!.status]}`); bump('keep'); continue }
-      setStatus(node, d === 'closing' ? 'closing' : 'closed', `${yr}未列${it.moeNote ? `；${it.moeNote}` : ''}`); bump(d); continue
+      setStatus(node, d === 'closing' ? 'closing' : 'closed', `${yr}未列${it.moeNote ? `；${it.moeNote}` : ''}`); stamp(node); bump(d); continue
     }
     const changed = it.fields.filter((f) => f.key !== 'code').map((f) => `${f.label} ${f.from || '—'}→${f.to || '—'}`)
     if (it.kind === 'recode') {
@@ -255,13 +331,16 @@ export function applyImport(data: RbacData, batch: MoeBatch, decisions: Record<s
       log(node, `改制換代碼 ${old}→${it.code}${changed.length ? `；${changed.join('；')}` : ''}`)
     } else if (changed.length) log(node, `${yr}：${changed.join('；')}`)
     applyFields(data, node, m!)
+    syncBranches(data, node, ctx)
     node.school!.moeYear = batch.year
+    // 實際有異動才把「最後異動來源」記為本次匯入（狀態選擇「維持現狀」且欄位無差異者不算）
+    if (it.fields.length || ['recode', 'activate', 'reopen'].includes(it.kind) || (it.kind === 'status' && d !== 'keep')) stamp(node)
     if (it.kind === 'activate' || it.kind === 'reopen') setStatus(node, 'active', it.kind === 'activate' ? '籌備處轉為正式學校' : `${yr}再次列出`)
     if (it.kind === 'status' && d !== 'keep') setStatus(node, d === 'closed' ? 'closed' : 'closing', it.moeNote ?? it.reason ?? '')
     bump(it.kind === 'status' ? d : it.kind)
   }
   // 未異動的學校也更新「最近出現於名錄」學年度
-  for (const n of schoolsOf(data)) if (inBatch.has(n.school!.code)) n.school!.moeYear = batch.year
+  for (const n of schoolsOf(data)) if (inBatch.has(n.school!.code)) { n.school!.moeYear = batch.year; n.school!.importId = importId; if (n.school!.source === 'manual') { n.school!.source = 'moe'; stamp(n) } }
   done.unchanged = pv.unchanged
   return { preview: pv, done }
 }

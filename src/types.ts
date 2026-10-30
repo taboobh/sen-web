@@ -47,9 +47,17 @@ export interface SchoolInfo {
   status: SchoolStatus
   statusSince?: string
   statusNote?: string
-  /** 最近一次出現在統計處名錄的學年度；null＝手動新增 */
+  /** 最近一次出現在統計處名錄的學年度；null＝手動新增、尚未出現在名錄 */
   moeYear: number | null
+  /** 最近一次包含此校的名錄匯入（對應 SchoolImportRecord.id）；null＝手動新增、尚未出現在名錄 */
+  importId: number | null
+  /** 目前資料最後一次異動的來源：哪一次名錄匯入，或何時由誰手動新增／修改 */
+  lastChange: SchoolChangeRef
   source: 'moe' | 'manual'
+  /** 分班才有：母園代碼（分班是母園之下的獨立機構節點，可選為本職機構） */
+  branchOf?: string
+  /** 母園才有：名錄列出的分班（用來比對年度異動；實際機構是母園之下的分班節點） */
+  branches?: { code: string; name: string; town: string; address: string; phone: string }[]
   /** 改制換代碼前的舊代碼 */
   oldCodes?: string[]
   /** 更名前的校名 */
@@ -63,6 +71,11 @@ export interface SchoolInfo {
   /** 異動紀錄 */
   history: { at: string; by: string; text: string }[]
 }
+
+/** 學校資料只保留最新一筆；每筆記錄目前內容來自哪一次匯入或哪一次手動異動 */
+export type SchoolChangeRef =
+  | { kind: 'import'; importId: number; year: number | null; at: string; by: string }
+  | { kind: 'manual' | 'school'; action: 'create' | 'update'; at: string; by: string; fields: string[] }
 
 export interface SchoolImportRecord {
   id: number

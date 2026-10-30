@@ -30,9 +30,10 @@ function canManageMoe(session: ResolvedSession) {
   return scope?.type === 'ROOT' && authorize(db, session, 'base:create').allowed && authorize(db, session, 'base:update').allowed
 }
 
-const districtName = (n: ScopeNode) => {
+const districtName = (n: ScopeNode): string => {
   if (n.ntaDirect) return '署轄'
   const p = db.scopes.find((x) => x.id === n.parentId)
+  if (p?.type === 'SCHOOL') return districtName(p)   // 分班：同母園
   return p?.type === 'DISTRICT' ? p.name : '未歸分區'
 }
 const cnt = (id: string) => ({
@@ -54,8 +55,11 @@ function log(session: ResolvedSession, permission: string, target: string, decis
 function canEditSchoolSelf(session: ResolvedSession, n: ScopeNode) {
   if (canManageMoe(session)) return true
   const mine = db.scopes.find((x) => x.id === session.assignment.scopeId)
-  return mine?.type === 'SCHOOL' && mine.id === n.id && authorize(db, session, 'base:update', { scopeId: n.id }).allowed
+  // 本校，或本校的分班（母園的學校管理員可維護分班）
+  return mine?.type === 'SCHOOL' && (mine.id === n.id || n.parentId === mine.id) && authorize(db, session, 'base:update', { scopeId: n.id }).allowed
 }
+
+const nowText = () => new Date().toLocaleString('zh-TW', { hour12: false })
 
 const isFiles = (v: unknown): v is MoeFile[] => Array.isArray(v) && v.every((f) => f && typeof f === 'object' && Array.isArray((f as MoeFile).schools))
 
@@ -86,7 +90,8 @@ export const schoolHandlers = [
     if (!n) return HttpResponse.json({ error: 'not_found', message: '學校不存在' }, { status: 404 })
     const d = authorize(db, r.session, 'base:read', { scopeId: n.id })
     if (!d.allowed) return forbidden(d.reason)
-    return HttpResponse.json({ ...row(n), history: n.school!.history, canEditSelf: canEditSchoolSelf(r.session, n), canManage: canManageMoe(r.session) })
+    const imp = db.schoolImports.find((x) => x.id === n.school!.importId) ?? null
+    return HttpResponse.json({ ...row(n), history: n.school!.history, import: imp && { id: imp.id, year: imp.year, at: imp.at, by: imp.by }, canEditSelf: canEditSchoolSelf(r.session, n), canManage: canManageMoe(r.session) })
   }),
 
   // 學校自行維護：電話、校長、發言人（聯絡人）。署管理員與本校可改；縣市、分區不可
@@ -120,7 +125,8 @@ export const schoolHandlers = [
     sc.phone = next.phone
     sc.principal = next.principal || undefined
     sc.contact = next.contact
-    sc.history.unshift({ at: today(), by: `${session.accountName}（${session.role.name}）`, text: changes.join('；') })
+    sc.history.unshift({ at: nowText(), by: `${session.accountName}（${session.role.name}）`, text: changes.join('；') })
+    sc.lastChange = { kind: bySchool ? 'school' : 'manual', action: 'update', at: nowText(), by: `${session.accountName}（${session.role.name}）`, fields: changes.map((c) => c.split(' ')[0]) }
     log(session, 'base:update', `${sc.code} ${n.name}：${changes.join('；')}`, 'ALLOW', 'OK')
     return HttpResponse.json(row(n))
   }),
@@ -162,11 +168,17 @@ export const schoolHandlers = [
     Object.assign(sc, { ...next, town })
     if (status !== sc.status) Object.assign(sc, { status, statusSince: today(), statusNote: b.statusNote!.trim() })
     n.stages = schoolStages(levels, name)
-    const place = placeSchool(db, { ...sc, name })
-    n.areaId = place.areaId
-    n.ntaDirect = place.ntaDirect || undefined
-    if (place.parentId !== n.parentId) { n.parentId = place.parentId; n.path = `${db.scopes.find((x) => x.id === place.parentId)!.path}/${n.id}` }
-    sc.history.unshift({ at: today(), by: session.accountName, text: `手動修正：${changes.join('；')}` })
+    if (!sc.branchOf) {   // 分班固定掛在母園之下
+      const place = placeSchool(db, { ...sc, name })
+      n.areaId = place.areaId
+      n.ntaDirect = place.ntaDirect || undefined
+      if (place.parentId !== n.parentId) {
+        n.parentId = place.parentId; n.path = `${db.scopes.find((x) => x.id === place.parentId)!.path}/${n.id}`
+        for (const c of db.scopes.filter((x) => x.parentId === n.id)) c.path = `${n.path}/${c.id}`
+      }
+    }
+    sc.history.unshift({ at: nowText(), by: session.accountName, text: `手動修正：${changes.join('；')}` })
+    sc.lastChange = { kind: 'manual', action: 'update', at: nowText(), by: `${session.accountName}（${session.role.name}）`, fields: changes.map((c) => c.split(' ')[0]) }
     log(session, 'base:update', `${sc.code} ${name}：${changes.join('；')}`, 'ALLOW', 'OK')
     return HttpResponse.json(row(n))
   }),
@@ -189,9 +201,8 @@ export const schoolHandlers = [
     const address = (b.address ?? '').trim()
     const m: MoeSchool = { code, name, ownership: b.ownership ?? '', city: b.city!, zip: (b.zip ?? '').trim(), address, town: townOf(b.city!, address), phone: (b.phone ?? '').trim(), website: (b.website ?? '').trim(), levels }
     const st: SchoolStatus = b.status === 'preparing' ? 'preparing' : 'active'
-    const n = createSchoolNode(db, m, null, session.accountName, today(), `s${code}`, st)
-    n.school!.source = 'manual'
-    n.school!.history = [{ at: today(), by: session.accountName, text: `手動新增（${SCHOOL_STATUS_TEXT[st]}），待統計處名錄確認` }]
+    const n = createSchoolNode(db, m, { year: null, by: session.accountName, now: nowText(), importId: null }, `s${code}`, st)
+    n.school!.history = [{ at: nowText(), by: session.accountName, text: `手動新增（${SCHOOL_STATUS_TEXT[st]}），待統計處名錄確認` }]
     log(session, 'base:create', `手動新增學校 ${code} ${name}`, 'ALLOW', 'OK')
     return HttpResponse.json(row(n), { status: 201 })
   }),
@@ -218,8 +229,10 @@ export const schoolHandlers = [
     if (!isFiles(b.files) || !b.files.length) return badRequest('請先選擇名錄檔案')
     const batch = mergeMoe(b.files)
     if (!batch.schools.length) return badRequest('檔案中沒有可匯入的學校')
-    const { done } = applyImport(db, batch, b.decisions ?? {}, session.accountName, today())
-    const rec = { id: (db.schoolImports[0]?.id ?? 0) + 1, at: new Date().toLocaleString('zh-TW', { hour12: false }), by: session.accountName, year: batch.year, levels: batch.levels, files: b.files.map((f) => f.fileName), summary: done }
+    const id = (db.schoolImports[0]?.id ?? 0) + 1
+    const at = nowText()
+    const { done } = applyImport(db, batch, b.decisions ?? {}, session.accountName, at, id)
+    const rec = { id, at, by: session.accountName, year: batch.year, levels: batch.levels, files: b.files.map((f) => f.fileName), summary: done }
     db.schoolImports.unshift(rec)
     log(session, 'base:create', `匯入 ${batch.year ?? ''} 學年度學校名錄：${Object.entries(done).map(([k, v]) => `${k} ${v}`).join('、')}`, 'ALLOW', 'OK')
     return HttpResponse.json(rec)

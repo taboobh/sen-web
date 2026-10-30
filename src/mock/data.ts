@@ -42,7 +42,7 @@ export const DEMO_SCHOOL_IDS: Record<string, string> = {
   '353601': 'sC1', // 臺北市中正區 市立螢橋國小
 }
 
-type SeedRow = [string, string, string, string, string, string, string, string, string, string, number]
+type SeedRow = [string, string, string, string, string, string, string, string, string, string, number, 0 | [string, string, string, string, string][]]
 const SEED = seed as unknown as { year: number; rows: SeedRow[] }
 export const SEED_YEAR = SEED.year
 
@@ -65,9 +65,10 @@ export function buildSchoolTree(): { scopes: ScopeNode[]; areas: AdminArea[] } {
   }
   const tmp = { scopes, areas, schoolImports: [] } as unknown as RbacData
   for (const r of rows) {
-    const [code, name, ownership, city, town, zip, address, phone, website, levels, preparing] = r
-    createSchoolNode(tmp, { code, name, ownership: ownership as '公立' | '私立' | '', city, town, zip, address, phone, website, levels: levels.split(',') as SchoolLevel[], ...(preparing ? { preparing: true } : {}) },
-      SEED.year, '系統初始化', '2025-08-01', DEMO_SCHOOL_IDS[code])
+    const [code, name, ownership, city, town, zip, address, phone, website, levels, preparing, br] = r
+    const branches = br ? br.map(([c, n, t, a, p]) => ({ code: c, name: n, town: t, address: a, phone: p })) : undefined
+    createSchoolNode(tmp, { code, name, ownership: ownership as '公立' | '私立' | '', city, town, zip, address, phone, website, levels: levels.split(',') as SchoolLevel[], ...(preparing ? { preparing: true } : {}), ...(branches ? { branches } : {}) },
+      { year: SEED.year, by: '系統初始化', now: '2025-08-01', importId: 1 }, DEMO_SCHOOL_IDS[code])
   }
   return { scopes, areas }
 }
@@ -76,7 +77,7 @@ const TREE = buildSchoolTree()
 export const SCOPES: ScopeNode[] = TREE.scopes
 export const AREAS: AdminArea[] = TREE.areas
 const cloneScope = (x: ScopeNode): ScopeNode => ({ ...x, stages: x.stages ? [...x.stages] : undefined,
-  school: x.school ? { ...x.school, levels: [...x.school.levels], history: [...x.school.history], contact: x.school.contact ? { ...x.school.contact } : undefined } : undefined })
+  school: x.school ? { ...x.school, levels: [...x.school.levels], history: [...x.school.history], contact: x.school.contact ? { ...x.school.contact } : undefined, branches: x.school.branches?.map((b) => ({ ...b })), lastChange: { ...x.school.lastChange } } : undefined })
 
 /** 動作字母：C 新增 R 查詢 U 修改 D 刪除 A 審核 E 匯出。權限＝模組 × 動作，示範值待業務核准。 */
 export const ROLES: Role[] = [

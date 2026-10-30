@@ -30,6 +30,7 @@ const QUICK: Record<string, (r: SchoolRow) => boolean> = {
   '廢校／停辦': (r) => r.status === 'closed',
   未歸分區: (r) => r.district === '未歸分區' && r.status !== 'closed',
   手動新增: (r) => r.source === 'manual',
+  分班: (r) => !!r.branchOf,
 }
 
 export default function SchoolsView() {
@@ -46,9 +47,9 @@ export default function SchoolsView() {
   if (!data) return <Spin />
 
   const columns: Col<SchoolRow>[] = [
-    { key: 'code', title: '學校代碼', width: 100, value: (r) => r.code, render: (r) => <Typography.Text code>{r.code}</Typography.Text>, filter: false },
+    { key: 'code', title: '學校代碼', width: 125, value: (r) => r.code, render: (r) => <Typography.Text code>{r.code}</Typography.Text>, filter: false },
     { key: 'name', title: '學校名稱', width: 240, value: (r) => r.name, filter: false,
-      render: (r) => <a onClick={() => setDetail(r.id)}>{r.name}</a> },
+      render: (r) => <><a onClick={() => setDetail(r.id)}>{r.name}</a>{r.branchOf && <Tag color="cyan" style={{ marginLeft: 6 }}>分班</Tag>}</> },
     { key: 'levels', title: '學制', width: 150, value: (r) => r.levels.join('、'), values: (r) => r.levels },
     { key: 'ownership', title: '公私立', width: 80, value: (r) => r.ownership },
     { key: 'city', title: '縣市', width: 90, value: (r) => r.city },
@@ -56,8 +57,6 @@ export default function SchoolsView() {
     { key: 'district', title: '分區', width: 170, value: (r) => r.district,
       render: (r) => r.district === '未歸分區' ? <Tooltip title="地址無法判斷鄉鎮市區，學校先掛在縣市下"><Tag color="orange">未歸分區</Tag></Tooltip> : r.district === '署轄' ? <Tag color="purple">署轄</Tag> : r.district },
     { key: 'status', title: '狀態', width: 130, value: (r) => SCHOOL_STATUS_TEXT[r.status], render: (r) => statusTag(r.status) },
-    { key: 'moeYear', title: '名錄學年度', width: 100, value: (r) => r.moeYear ?? '手動新增',
-      render: (r) => r.source === 'manual' ? <Tag color="gold">手動新增</Tag> : r.moeYear },
     { key: 'principal', title: '校長', width: 100, value: (r) => r.principal ?? '' },
     { key: 'contact', title: '發言人（聯絡人）', width: 200, value: (r) => [r.contact?.name, r.contact?.title, r.contact?.phone].filter(Boolean).join(' ') },
     { key: 'address', title: '地址', width: 260, value: (r) => r.address, filter: false },
@@ -77,7 +76,7 @@ export default function SchoolsView() {
         message={<>學校資料來自<b>教育部統計處各級學校名錄</b>（真實學校代碼）{last ? `，最近一次匯入：${last.year ?? ''} 學年度（${last.at}，${last.by}）` : ''}。</>}
         description={<>
           <div>狀態：<b>使用中</b>；<b>停招</b>＝既有學生畢業前仍可選為本職機構，不能新增學生；<b>未啟用</b>＝有代碼的籌備處，可先建立帳號；<b>廢校／停辦</b>＝不能再選為任職機構或指派角色。沒有代碼的籌備處不匯入。</div>
-          <div><b>署管理員</b>可新增學校、修改全部欄位與狀態，並每年匯入統計處名錄；<b>學校</b>只能修改本校的<b>電話、校長、發言人（聯絡人）</b>（學校改過電話後，名錄匯入不再覆寫電話）；縣市、分區僅能瀏覽。大專校院不納入；統計處未提供學前（幼兒園）名錄，學前沿用前一學年度資料。</div>
+          <div><b>署管理員</b>可新增學校、修改全部欄位與狀態，並每年匯入統計處名錄；<b>學校</b>只能修改本校的<b>電話、校長、發言人（聯絡人）</b>（學校改過電話後，名錄匯入不再覆寫電話）；縣市、分區僅能瀏覽。大專校院不納入；幼兒園的<b>分班</b>是母園之下的機構，可選為本職機構，母園的學校管理員也可維護；學前（幼兒園、互助教保服務中心）當學年度名錄未公告時，沿用前一學年度資料、不判定廢校。</div>
         </>} />
       <Segmented style={{ marginBottom: 12 }} value={quick} onChange={(v) => setQuick(String(v))}
         options={Object.keys(QUICK).map((k) => ({ value: k, label: `${k}（${data.rows.filter(QUICK[k]).length}）` }))} />
@@ -97,7 +96,17 @@ export default function SchoolsView() {
   )
 }
 
-type Detail = SchoolRow & { history: SchoolInfo['history']; canEditSelf: boolean; canManage: boolean }
+type Detail = SchoolRow & { history: SchoolInfo['history']; canEditSelf: boolean; canManage: boolean; import: { id: number; year: number | null; at: string; by: string } | null }
+
+/** 這筆學校資料目前的內容來自哪裡：最近一次包含此校的名錄匯入，以及最後一次異動 */
+function sourceText(s: Detail) {
+  const imp = s.import ? `${s.import.year ?? ''} 學年度統計處名錄（匯入編號 #${s.import.id}，${s.import.at}，${s.import.by}）` : '尚未出現在統計處名錄（手動新增）'
+  const c = s.lastChange
+  const last = c.kind === 'import'
+    ? `${c.year ?? ''} 學年度名錄匯入（#${c.importId}，${c.at}）`
+    : `${c.kind === 'school' ? '學校自行' : '署管理員手動'}${c.action === 'create' ? '新增' : '修改'}（${c.at}，${c.by}${c.fields.length ? `；${c.fields.join('、')}` : ''}）`
+  return { imp, last }
+}
 function SchoolDrawer({ id, onClose, onSaved }: { id: string | null; onClose: () => void; onSaved: () => void }) {
   const [s, setS] = useState<Detail | null>(null)
   const [n, setN] = useState(0)
@@ -137,8 +146,11 @@ function SchoolDrawer({ id, onClose, onSaved }: { id: string | null; onClose: ()
                 { label: '電話', children: <>{s.phone || '-'}{s.phoneBySchool && <Typography.Text type="secondary">（學校自行維護，名錄匯入不覆寫）</Typography.Text>}</> },
                 { label: '校長', children: s.principal || '-' },
                 { label: '發言人（聯絡人）', children: s.contact?.name ? [s.contact.name, s.contact.title, s.contact.phone, s.contact.email].filter(Boolean).join('　') : '-' },
+                ...(s.branchOf ? [{ label: '母園', children: <Typography.Text code>{s.branchOf}</Typography.Text> }] : []),
+                ...(s.branches?.length ? [{ label: `分班（${s.branches.length}，可選為本職機構）`, children: <>{s.branches.map((b) => <div key={b.code}><Typography.Text code>{b.code}</Typography.Text> {b.name}<Typography.Text type="secondary">　{b.address}　{b.phone}</Typography.Text></div>)}</> }] : []),
                 { label: '網址', children: s.website ? <a href={s.website} target="_blank" rel="noreferrer">{s.website}</a> : '-' },
-                { label: '來源', children: s.source === 'manual' ? '手動新增（待名錄確認）' : `教育部統計處名錄（最近出現：${s.moeYear} 學年度）` },
+                { label: '資料來源（匯入）', children: sourceText(s).imp },
+                { label: '最後異動', children: sourceText(s).last },
                 { label: '學生／在職人員（示範）', children: `${s.students} 名學生、${s.people} 位在職人員` },
               ]} />
               <Typography.Title level={5} style={{ marginTop: 16 }}>學校自行維護：電話、校長、發言人（聯絡人）</Typography.Title>

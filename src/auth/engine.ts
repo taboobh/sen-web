@@ -87,7 +87,7 @@ export function validateDistrictAreas(data: RbacData): string[] {
   for (const d of data.scopes.filter((s) => s.type === 'DISTRICT')) {
     if (!data.areas.some((a) => a.districtId === d.id)) problems.push(`${d.name} 沒有任何行政區／鄉鎮`)
   }
-  for (const s of data.scopes.filter((x) => x.type === 'SCHOOL' && !x.ntaDirect && x.school?.status !== 'closed')) {
+  for (const s of data.scopes.filter((x) => x.type === 'SCHOOL' && !x.ntaDirect && !x.school?.branchOf && x.school?.status !== 'closed')) {
     const a = data.areas.find((x) => x.id === s.areaId)
     if (!a) problems.push(`${s.name} 未指定行政區／鄉鎮`)
     else if (a.districtId !== s.parentId) problems.push(`${s.name} 的行政區不屬於其上層分區`)
