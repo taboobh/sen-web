@@ -7,7 +7,7 @@ import { REASON_TEXT } from '../auth/engine'
 const { Header, Content } = Layout
 
 export default function AppLayout() {
-  const { me, switchIdentity, logout } = useAuth()
+  const { me, status, switchIdentity, logout } = useAuth()
   const nav = useNavigate()
   if (!me) return null
   const a = me.active
@@ -33,6 +33,7 @@ export default function AppLayout() {
           <Tag>{a.scope.name}</Tag>
           {a.stages.length > 0 && <Tag color="purple">{a.stages.join('、')}</Tag>}
           <Typography.Text type="secondary">{me.account.name}</Typography.Text>
+          {status && <Tag>{status.method === 'moe_oidc' ? '教育雲端登入' : '本機登入'}</Tag>}
           <Button icon={<ExperimentOutlined />} onClick={() => nav('/lab')}>權限模擬</Button>
           <Button icon={<LogoutOutlined />} onClick={() => { logout(); nav('/') }}>登出</Button>
         </Space>

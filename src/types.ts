@@ -34,8 +34,38 @@ export interface Account {
   /** 使用者姓名（顯示用，不是登入帳號） */
   name: string
   email: string
+  /** 手機、市話：與電子郵件三選一以上（由國教署管理員設定最少項數） */
+  mobile?: string
+  phone?: string
+  /** 已通過驗證碼驗證的聯絡方式（變更內容後會重置） */
+  contactVerified?: Partial<Record<ContactField, boolean>>
+  /** 身分證／居留證：只存雜湊（正式版為 HMAC＋金鑰）與遮罩顯示，不保存明文 */
+  idHash?: string
+  idMasked?: string
+  /** none 未填；unverified 自填、待核對；verified 已驗證（教育雲端 guid 比對一致，或管理員核准） */
+  idStatus?: IdStatus
+  /** 與其他帳號身分證相同時記錄對方帳號（只給管理員處理，不告知使用者） */
+  idConflictWith?: string
   status: 'active' | 'locked' | 'disabled'
   note?: string
+}
+
+export type ContactField = 'email' | 'mobile' | 'phone'
+export type IdStatus = 'none' | 'unverified' | 'verified'
+export type LoginMethod = 'moe_oidc' | 'local'
+
+/** 個人資料規則：國教署管理員可在「帳號資料欄位設定」調整 */
+export interface ProfileSettings {
+  /** 身分證／居留證號是否必填 */
+  idRequired: boolean
+  /** 可填的聯絡方式 */
+  contactFields: ContactField[]
+  /** 聯絡方式至少要有幾項有效（0＝不要求） */
+  contactMin: number
+  /** 聯絡方式是否須通過驗證碼驗證（市話無法驗證） */
+  verifyContact: boolean
+  /** 是否驗證身分證：檢查碼＋教育雲端 guid 比對＋自填者須管理員核對。關閉時（訓練站虛擬資料）寬鬆格式即通過 */
+  verifyIdNumber: boolean
 }
 
 export interface Identity {
@@ -43,6 +73,16 @@ export interface Identity {
   accountId: string
   orgScopeId: string
   jobTitle: string
+  /** 任職狀態；未填＝在職。離任時該身分的角色指派已全數清空 */
+  status?: 'active' | 'ended'
+  endReason?: EndReason
+  endedAt?: string
+}
+
+/** 離任原因：調職、退休、離職，或教育雲端回傳的學校代碼與系統記錄不同（換校） */
+export type EndReason = 'transfer' | 'retire' | 'resign' | 'school_changed'
+export const END_REASON_TEXT: Record<EndReason, string> = {
+  transfer: '調職', retire: '退休', resign: '離職', school_changed: '教育雲端學校代碼異動',
 }
 
 export interface RoleAssignment {
@@ -51,7 +91,7 @@ export interface RoleAssignment {
   roleCode: string
   scopeId: string
   stages: Stage[]
-  /** 兼任／借調：勾選才需要有效期間；未勾選（本職）為長期有效，期間為 null */
+  /** 借調（外部單位）：才需要有效期間；本職機構內為長期有效，期間為 null */
   concurrent: boolean
   effectiveFrom: string | null
   effectiveTo: string | null
@@ -89,6 +129,11 @@ export interface RbacData {
   assignments: RoleAssignment[]
   students: Student[]
   responsibilities: Responsibility[]
+  profileSettings: ProfileSettings
+  /** 模擬教育雲端 IdP 回傳的 guid（帳號 id → guid）；沒有項目＝該帳號未取得 guid */
+  ssoGuids: Record<string, string>
+  /** 模擬教育雲端回傳的任職學校代碼（titles[].schoolid）與職稱；教育雲端登入時用來同步任職機構 */
+  ssoProfiles: Record<string, { schoolIds: string[]; jobTitle?: string }>
 }
 
 export interface MenuItem { id: string; title: string }
@@ -114,6 +159,8 @@ export type ReasonCode =
   | 'NO_RELATION'
   | 'ROLE_NOT_DELEGABLE'
   | 'SCHOOL_ADMIN_RULE'
+  | 'PROFILE_INCOMPLETE'
+  | 'ID_PENDING'
 
 export interface Decision { allowed: boolean; reason: ReasonCode }
 

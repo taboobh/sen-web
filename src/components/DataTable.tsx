@@ -15,6 +15,8 @@ export interface Col<T> {
   titleNode?: ReactNode
   /** 供查詢、篩選、排序、匯出使用的純文字／數字值 */
   value: (r: T) => string | number | null | undefined
+  /** 一格有多個值（例如多個角色）：篩選以單一值為選項、列內符合任一即顯示 */
+  values?: (r: T) => string[]
   render?: (r: T) => ReactNode
   /** false＝不提供欄位篩選（例如操作欄） */
   filter?: boolean
@@ -40,6 +42,10 @@ interface Props<T> {
   /** 匯出前的掛鉤（例如寫稽核） */
   onExport?: (count: number) => void
   extra?: ReactNode
+  /** 展開列：例如帳號列展開後看每一筆角色指派明細 */
+  expandedRowRender?: (r: T) => ReactNode
+  /** 匯出時額外的工作表（例如帳號彙總＋每筆指派明細），依目前篩選後的列產生 */
+  extraSheets?: (view: T[]) => { name: string; rows: Record<string, unknown>[] }[]
 }
 
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v))
@@ -57,7 +63,7 @@ export default function DataTable<T>(p: Props<T>) {
     let out = rows.filter((r) => !kw || columns.some((c) => !c.noExport && str(c.value(r)).toLowerCase().includes(kw)))
     for (const c of columns) {
       const sel = filters[c.key]
-      if (sel && sel.length) out = out.filter((r) => sel.includes(str(c.value(r))))
+      if (sel && sel.length) out = out.filter((r) => c.values ? c.values(r).some((v) => sel.includes(v)) : sel.includes(str(c.value(r))))
     }
     if (sort) {
       const c = columns.find((x) => x.key === sort.key)
@@ -74,7 +80,7 @@ export default function DataTable<T>(p: Props<T>) {
   }, [rows, columns, q, filters, sort])
 
   const antCols: ColumnsType<T> = columns.map((c) => {
-    const distinct = [...new Set(rows.map((r) => str(c.value(r))))].filter((v) => v !== '').sort(collator.compare)
+    const distinct = [...new Set(rows.flatMap((r) => c.values ? c.values(r) : [str(c.value(r))]))].filter((v) => v !== '').sort(collator.compare)
     const canFilter = c.filter !== false && !c.noExport && distinct.length > 0
     return {
       key: c.key, title: c.titleNode ?? c.title, width: c.width, fixed: c.fixed,
@@ -99,7 +105,8 @@ export default function DataTable<T>(p: Props<T>) {
     const ws = XLSX.utils.json_to_sheet(data, { header: cols.map((c) => c.title) })
     ws['!cols'] = cols.map((c) => ({ wch: Math.max(c.title.length * 2, ...view.slice(0, 200).map((r) => str(c.value(r)).length * 2), 8) }))
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, '資料')
+    XLSX.utils.book_append_sheet(wb, ws, p.extraSheets ? '帳號彙總' : '資料')
+    for (const sh of p.extraSheets?.(view) ?? []) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sh.rows), sh.name)
     XLSX.writeFile(wb, `${p.exportName}_${stamp()}.xlsx`)
     p.onExport?.(view.length)
   }
@@ -123,6 +130,7 @@ export default function DataTable<T>(p: Props<T>) {
       <Table<T>
         size="small" loading={p.loading} rowKey={rowKey} dataSource={view} columns={antCols}
         scroll={{ x: p.scrollX ?? 800 }}
+        expandable={p.expandedRowRender ? { expandedRowRender: p.expandedRowRender } : undefined}
         pagination={p.pagination === false ? false : { pageSize: p.pageSize ?? 10, showSizeChanger: true, hideOnSinglePage: false } as TablePaginationConfig}
         onChange={(_pg, f, s) => {
           const next: Record<string, Key[] | null> = {}

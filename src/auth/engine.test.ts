@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createRbacData } from '../mock/data'
-import { canEditRoles, diffRole, normalizeGrants, validateRoleEdit, type RoleEdit, assignableScopes, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAccounts, validateAssignment, validateDistrictAreas, validateUsername } from './engine'
+import { endIdentity, syncSsoAffiliation, canEditRoles, diffRole, normalizeGrants, validateRoleEdit, type RoleEdit, assignableScopes, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAccounts, validateAssignment, primaryConflict, validateDistrictAreas, validateUsername } from './engine'
 
 const NOW = '2026-10-28'
 const data = createRbacData()
@@ -129,7 +129,7 @@ describe('指派角色規則', () => {
     expect(assignableScopes(data, city, 'DISTRICT_ADMIN').map((x) => x.type)).toEqual(expect.arrayContaining(['DISTRICT']))
   })
 
-  it('兼任／借調必須有有效期間；本職無期間且長期有效', () => {
+  it('借調必須有有效期間；本職機構內長期有效', () => {
     const base = data.assignments.find((a) => a.id === 'ra06')!
     expect(base.concurrent).toBe(false)
     expect(validateAssignment(data, { ...base, concurrent: true, effectiveFrom: null, effectiveTo: null })).toMatch(/有效期間/)
@@ -181,5 +181,114 @@ describe('角色與權限設定（修改角色範本）', () => {
     const other = createRbacData()
     other.roles[0].grants.news = 'R'
     expect(d.roles[0].grants.news).toBe('CRUDA')
+  })
+})
+
+describe('一個帳號、多機構、多角色', () => {
+  it('同機構多角色、同角色多機構：每個身分各自的資料範圍互不外溢', () => {
+    const idents = data.identities.filter((i) => i.accountId === 'a13')
+    expect(idents.map((i) => i.orgScopeId).sort()).toEqual(['sA1', 'sA2'])
+    const roles = (id: string) => data.assignments.filter((a) => a.identityId === id).map((a) => a.roleCode).sort()
+    expect(roles('i13a')).toEqual(['SCHOOL_ADMIN', 'TEACHER'])   // 單一機構多角色
+    expect(roles('i13b')).toEqual(['TEACHER'])                   // 同一角色（教師）也在另一機構
+    const a = S('a13', 'i13a'), b = S('a13', 'i13b')
+    expect(inSessionScope(data, a, 'sA1')).toBe(true)
+    expect(inSessionScope(data, a, 'sA2')).toBe(false)
+    expect(inSessionScope(data, b, 'sA2')).toBe(true)
+    expect(inSessionScope(data, b, 'sA1')).toBe(false)
+  })
+
+  it('所有示範指派都通過驗證', () => {
+    for (const x of data.assignments.filter((a) => data.identities.find((i) => i.id === a.identityId)?.accountId === 'a13'))
+      expect(validateAssignment(data, x)).toBeNull()
+  })
+})
+
+describe('尚未指派角色的使用者', () => {
+  it('學校管理員看得到本校未指派角色的使用者，但該使用者不能使用任何需要權限的功能', () => {
+    const school = S('a05', 'i05a')
+    const visible = data.identities.filter((i) => inSessionScope(data, school, i.orgScopeId))
+    const a11 = visible.find((i) => i.accountId === 'a11')
+    expect(a11).toBeTruthy()                                              // 看得到
+    expect(data.assignments.some((x) => x.identityId === a11!.id)).toBe(false) // 尚未指派
+    expect(resolveSession(data, 'a11', a11!.id, NOW)).toEqual({ reason: 'NO_ASSIGNMENT' }) // 無法取得任何權限
+    // 其他學校的未指派使用者看不到
+    expect(visible.some((i) => i.accountId === 'a12')).toBe(false)
+  })
+})
+
+describe('教育雲端學校代碼同步與離任', () => {
+  const fresh = () => createRbacData()
+  const NOWD = '2026-10-30'
+
+  it('首次登入的新使用者：建立該校身分，預設不指派角色', () => {
+    const d = fresh()
+    expect(d.identities.some((i) => i.accountId === 'a14')).toBe(false)
+    const ch = syncSsoAffiliation(d, 'a14', ['sA1'], NOWD, '特教教師')
+    expect(ch.map((c) => c.kind)).toEqual(['created'])
+    const idn = d.identities.find((i) => i.accountId === 'a14')!
+    expect(idn.orgScopeId).toBe('sA1')
+    expect(d.assignments.some((a) => a.identityId === idn.id)).toBe(false)
+    expect(resolveSession(d, 'a14', idn.id, NOWD)).toEqual({ reason: 'NO_ASSIGNMENT' })
+    expect(syncSsoAffiliation(d, 'a14', ['sA1'], NOWD)).toEqual([])   // 再登入一次不重複建立
+  })
+
+  it('學校代碼與系統記錄不同：清空原學校角色、原身分離任、改任新學校且無角色', () => {
+    const d = fresh()
+    const old = d.identities.find((i) => i.accountId === 'a15')!
+    expect(d.assignments.some((a) => a.identityId === old.id)).toBe(true)
+    const ch = syncSsoAffiliation(d, 'a15', ['sA3'], NOWD)
+    expect(ch.map((c) => c.kind).sort()).toEqual(['created', 'ended'])
+    expect(ch.find((c) => c.kind === 'ended')!.clearedRoles).toEqual(['特教教師'])
+    expect(old.status).toBe('ended')
+    expect(old.endReason).toBe('school_changed')
+    expect(d.assignments.some((a) => a.identityId === old.id)).toBe(false)
+    const now = d.identities.find((i) => i.accountId === 'a15' && i.status !== 'ended')!
+    expect(now.orgScopeId).toBe('sA3')
+    expect(d.assignments.some((a) => a.identityId === now.id)).toBe(false)
+  })
+
+  it('學校代碼相同、為空或不存在時不變更；縣市層級身分不受影響', () => {
+    const d = fresh()
+    expect(syncSsoAffiliation(d, 'a06', ['sA1'], NOWD)).toEqual([])
+    expect(syncSsoAffiliation(d, 'a06', [], NOWD)).toEqual([])
+    expect(syncSsoAffiliation(d, 'a06', ['nope'], NOWD)).toEqual([])
+    syncSsoAffiliation(d, 'a05', ['sA1'], NOWD)               // 張組長：學校身分相符，縣市巡輔身分保留
+    expect(d.identities.find((i) => i.id === 'i05b')!.status).toBeUndefined()
+    expect(d.assignments.some((a) => a.id === 'ra05b')).toBe(true)
+  })
+
+  it('同一帳號多校：只清空不在教育雲端學校代碼內的學校', () => {
+    const d = fresh()
+    syncSsoAffiliation(d, 'a13', ['sA1'], NOWD)               // 蔡兼課原在 sA1、sA2
+    expect(d.identities.find((i) => i.id === 'i13a')!.status).toBeUndefined()
+    expect(d.identities.find((i) => i.id === 'i13b')!.status).toBe('ended')
+    expect(d.assignments.filter((a) => a.identityId === 'i13a').length).toBe(2)
+    expect(d.assignments.some((a) => a.identityId === 'i13b')).toBe(false)
+  })
+
+  it('調職、退休、離職：清空該機構角色並離任，其他機構不受影響；重複處理無效', () => {
+    const d = fresh()
+    expect(endIdentity(d, 'i13b', 'retire', NOWD)).toEqual(['特教教師'])
+    expect(d.identities.find((i) => i.id === 'i13b')).toMatchObject({ status: 'ended', endReason: 'retire' })
+    expect(d.assignments.filter((a) => a.identityId === 'i13a').length).toBe(2)
+    expect(endIdentity(d, 'i13b', 'resign', NOWD)).toEqual([])
+    expect(d.identities.find((i) => i.id === 'i13b')!.endReason).toBe('retire')
+  })
+
+  it('本職規則：每帳號一個本職機構；外部單位的角色才是借調（須期間），本職機構內不需借調', () => {
+    for (const acc of data.accounts) {
+      const ids = data.identities.filter((i) => i.accountId === acc.id)
+      const mine = data.assignments.filter((a) => ids.some((i) => i.id === a.identityId))
+      const home = new Set(mine.filter((a) => !a.concurrent).map((a) => ids.find((i) => i.id === a.identityId)!.orgScopeId))
+      expect(home.size, acc.username).toBeLessThanOrEqual(1)
+      for (const a of mine.filter((x) => x.concurrent)) expect(home.has(ids.find((i) => i.id === a.identityId)!.orgScopeId), acc.username).toBe(false)
+    }
+    const a13 = data.assignments.find((a) => a.id === 'ra13b')!
+    // 本職機構（i13a）再加長期角色可；到外部單位（i13b）不可為非借調
+    expect(primaryConflict(data, 'a13', { ...a13, id: 'x1', roleCode: 'AIDE' })).toBeNull()
+    expect(primaryConflict(data, 'a13', { ...a13, id: 'x2', identityId: 'i13b' })).toMatch(/借調/)
+    expect(primaryConflict(data, 'a13', { ...a13, id: 'x3', concurrent: true, effectiveFrom: '2026-08-01', effectiveTo: '2027-07-31' })).toMatch(/不需借調/)
+    expect(primaryConflict(data, 'a13', { ...a13, id: 'x4', identityId: 'i13b', concurrent: true, effectiveFrom: '2026-08-01', effectiveTo: '2027-07-31' })).toBeNull()
   })
 })

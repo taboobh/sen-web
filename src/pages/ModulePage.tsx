@@ -6,7 +6,8 @@ import { useAuth } from '../auth/AuthContext'
 import { MODULES } from '../mock/modules'
 import { ACTION_LABEL, type Action } from '../types'
 import StudentTable from './StudentTable'
-import { AccountsView, AuditView, RoleMatrixView } from './AdminViews'
+import { AccountsView, AuditView, IdReviewView, ProfileSettingsView, RoleMatrixView } from './AdminViews'
+import ProfileView from './ProfilePage'
 
 const ACTIONS: Action[] = ['create', 'read', 'update', 'delete', 'approve', 'export']
 
@@ -32,9 +33,12 @@ export default function ModulePage() {
 
   let body
   if (moduleId === 'students' && (currentId === 'swd' || currentId === 'gift')) body = <StudentTable />
-  else if (moduleId === 'admin' && (currentId === 'account' || currentId === 'school-account')) body = <AccountsView />
+  else if (moduleId === 'admin' && currentId === 'account') body = <AccountsView />
   else if (moduleId === 'admin' && currentId === 'role') body = <RoleMatrixView />
   else if (moduleId === 'admin' && currentId === 'audit') body = <AuditView />
+  else if (moduleId === 'admin' && currentId === 'profile') body = <ProfileView />
+  else if (moduleId === 'admin' && currentId === 'id-review') body = <IdReviewView />
+  else if (moduleId === 'admin' && currentId === 'profile-settings') body = <ProfileSettingsView />
   else body = (
     <Card>
       <Typography.Paragraph type="secondary">

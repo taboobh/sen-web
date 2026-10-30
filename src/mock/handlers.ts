@@ -1,43 +1,50 @@
 import { http, HttpResponse } from 'msw'
 import type { AuthTarget, ReasonCode, Stage } from '../types'
-import { REASON_TEXT, assignableScopes, canEditRoles, diffRole, normalizeGrants, validateRoleEdit, type RoleEdit, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, resolveSession, validateAssignment, validateDistrictAreas } from '../auth/engine'
+import { END_REASON_TEXT, type EndReason } from '../types'
+import { REASON_TEXT, endIdentity, syncSsoAffiliation, assignableScopes, canEditRoles, diffRole, normalizeGrants, validateRoleEdit, type RoleEdit, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, validateAssignment, validateDistrictAreas, primaryConflict } from '../auth/engine'
 import { audit, db, logAudit } from './state'
+import { forbidden, publicAccount, readSession, resolveGated, today, unauthorized } from './session'
+import { profileHandlers } from './profileHandlers'
+import { profileGate } from '../auth/profile'
+import type { LoginMethod } from '../types'
 import { MODULES } from './modules'
 
 /**
  * 假後端：規則與未來真實後端相同——每個請求都依「帳號＋目前身分」重新判斷授權。
  * 工作階段以 X-Demo-Session 標頭傳遞（正式登入方式尚未決定，屆時改為真實憑證）。
  */
-const today = () => new Date().toISOString().slice(0, 10)
-
-interface Sess { accountId: string; identityId: string }
-function readSession(req: Request): Sess | null {
-  try {
-    const raw = req.headers.get('X-Demo-Session')
-    return raw ? (JSON.parse(raw) as Sess) : null
-  } catch { return null }
-}
-const unauthorized = (reason: ReasonCode = 'ACCOUNT_INACTIVE') =>
-  HttpResponse.json({ error: 'unauthorized', reason, message: REASON_TEXT[reason] }, { status: 401 })
-const forbidden = (reason: ReasonCode) =>
-  HttpResponse.json({ error: 'forbidden', reason, message: REASON_TEXT[reason] }, { status: 403 })
-
 export const handlers = [
+  ...profileHandlers,
   // 模擬登入：只選帳號，不需密碼
   http.post('*/api/auth/login', async ({ request }) => {
-    const { accountId } = (await request.json()) as { accountId: string }
+    const { accountId, method } = (await request.json()) as { accountId: string; method?: LoginMethod }
+    const m: LoginMethod = method === 'moe_oidc' ? 'moe_oidc' : 'local'
     const account = db.accounts.find((a) => a.id === accountId)
     if (!account) return unauthorized()
     if (account.status !== 'active') return unauthorized('ACCOUNT_INACTIVE')
+    // 教育雲端登入：依教育雲端回傳的學校代碼同步任職機構（首次登入建立身分；學校代碼不同則清空原學校角色）
+    const sso = m === 'moe_oidc' ? db.ssoProfiles[accountId] : undefined
+    if (sso) {
+      for (const c of syncSsoAffiliation(db, accountId, sso.schoolIds, today(), sso.jobTitle)) {
+        const org = db.scopes.find((x) => x.id === c.orgScopeId)?.name ?? c.orgScopeId
+        logAudit({ accountName: account.name, roleName: '（教育雲端同步）', scopeId: c.orgScopeId, permission: 'sso:sync', decision: 'ALLOW', reason: 'OK',
+          target: c.kind === 'created' ? `首次或新任職：建立 ${org} 身分，未指派角色` : `學校代碼異動：離開 ${org}，清空角色${c.clearedRoles.length ? `（${c.clearedRoles.join('、')}）` : '（原本無角色）'}` })
+      }
+    }
+    // 不論哪種登入方式，缺必填資料或身分證待核對時，先進個人資料頁（identityId 留空，之後由 /me/status 補上）
+    if (profileGate(db.profileSettings, account).code) return HttpResponse.json({ accountId, identityId: '', method: m })
     const mine = db.identities.filter((i) => i.accountId === accountId)
     const usable = mine.find((i) => 'assignment' in pickFirst(i.id))
-    if (!usable) return unauthorized(mine.some((i) => db.assignments.some((a) => a.identityId === i.id)) ? 'ASSIGNMENT_EXPIRED' : 'NO_ASSIGNMENT')
-    return HttpResponse.json({ accountId, identityId: usable.id })
+    // 尚無可用角色也允許登入，進入「尚無可用角色」頁（identityId 留空）；真正的授權請求仍一律被拒
+    return HttpResponse.json({ accountId, identityId: usable?.id ?? '', method: m })
   }),
 
   http.get('*/api/accounts/demo', () =>
     HttpResponse.json(db.accounts.map((a) => ({
-      ...a,
+      ...publicAccount(a),
+      gate: profileGate(db.profileSettings, a).code,
+      hasSsoGuid: !!db.ssoGuids[a.id],
+      ssoSchools: (db.ssoProfiles[a.id]?.schoolIds ?? []).map((id) => db.scopes.find((x) => x.id === id)?.name ?? id),
       identities: db.identities.filter((i) => i.accountId === a.id).map((i) => {
         const p = pickFirst(i.id)
         const asg = 'assignment' in p ? p.assignment : db.assignments.find((x) => x.identityId === i.id)
@@ -54,6 +61,9 @@ export const handlers = [
   http.get('*/api/me/permissions', ({ request }) => {
     const s = readSession(request)
     if (!s) return unauthorized()
+    const acc = db.accounts.find((a) => a.id === s.accountId)
+    const g = acc && acc.status === 'active' ? profileGate(db.profileSettings, acc) : null
+    if (g?.code) return unauthorized(g.code)
     const me = buildMePermissions(db, s.accountId, s.identityId, today())
     if ('reason' in me) return unauthorized(me.reason)
     return HttpResponse.json(me)
@@ -62,7 +72,7 @@ export const handlers = [
   http.get('*/api/students', ({ request }) => {
     const s = readSession(request)
     if (!s) return unauthorized()
-    const r = resolveSession(db, s.accountId, s.identityId, today())
+    const r = resolveGated(s)
     if ('reason' in r) return unauthorized(r.reason)
     const { session } = r
     const gate = authorize(db, session, 'students:read')
@@ -80,7 +90,7 @@ export const handlers = [
   http.post('*/api/students', async ({ request }) => {
     const s = readSession(request)
     if (!s) return unauthorized()
-    const r = resolveSession(db, s.accountId, s.identityId, today())
+    const r = resolveGated(s)
     if ('reason' in r) return unauthorized(r.reason)
     const { session } = r
     // 新增到哪所學校：學校層級用自己的學校，其他層級用範圍內第一所學校
@@ -99,7 +109,7 @@ export const handlers = [
   http.delete('*/api/students/:id', ({ request, params }) => {
     const s = readSession(request)
     if (!s) return unauthorized()
-    const r = resolveSession(db, s.accountId, s.identityId, today())
+    const r = resolveGated(s)
     if ('reason' in r) return unauthorized(r.reason)
     const { session } = r
     const st = db.students.find((x) => x.id === params.id)
@@ -115,7 +125,7 @@ export const handlers = [
   http.post('*/api/authz/check', async ({ request }) => {
     const s = readSession(request)
     if (!s) return unauthorized()
-    const r = resolveSession(db, s.accountId, s.identityId, today())
+    const r = resolveGated(s)
     if ('reason' in r) return unauthorized(r.reason)
     const { permission, schoolId, studentId } = (await request.json()) as { permission: string; schoolId?: string; studentId?: string }
     const school = db.scopes.find((x) => x.id === schoolId)
@@ -128,7 +138,7 @@ export const handlers = [
   http.get('*/api/admin/overview', ({ request }) => {
     const s = readSession(request)
     if (!s) return unauthorized()
-    const r = resolveSession(db, s.accountId, s.identityId, today())
+    const r = resolveGated(s)
     if ('reason' in r) return unauthorized(r.reason)
     const { session } = r
     const d = authorize(db, session, 'admin:read')
@@ -148,7 +158,7 @@ export const handlers = [
       scopes,
       areas,
       areaProblems: validateDistrictAreas({ ...db, scopes, areas }),
-      accounts,
+      accounts: accounts.map(publicAccount),
       identities,
       assignments: assignments.map((a) => ({ ...a, problem: validateAssignment(db, a) })),
       canAssign,
@@ -166,7 +176,7 @@ export const handlers = [
   http.post('*/api/admin/assignments', async ({ request }) => {
     const s = readSession(request)
     if (!s) return unauthorized()
-    const r = resolveSession(db, s.accountId, s.identityId, today())
+    const r = resolveGated(s)
     if ('reason' in r) return unauthorized(r.reason)
     const { session } = r
     const body = (await request.json()) as { identityId: string; roleCode: string; scopeId: string; stages?: string[]; concurrent?: boolean; effectiveFrom?: string | null; effectiveTo?: string | null }
@@ -178,6 +188,7 @@ export const handlers = [
       logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'admin:update', target: `指派 ${role?.name ?? body.roleCode} 給 ${acc?.name ?? '-'}`, decision, reason })
     const bad = (message: string) => HttpResponse.json({ error: 'invalid', message }, { status: 400 })
     if (!identity || !role || !scope) return bad('身分、角色或資料範圍不存在')
+    if (identity.status === 'ended') return bad('此身分已離任，不能指派角色')
     // 對象使用者必須在自己的資料範圍內（學校管理員只能處理本校人員）
     const gate = inSessionScope(db, session, identity.orgScopeId)
       ? authorize(db, session, 'admin:update', { scopeId: scope.id })
@@ -186,24 +197,107 @@ export const handlers = [
     const denied = assignmentDenial(db, session, role.code, scope.id)
     if (denied) { log('DENY', denied); return forbidden(denied) }
     const stages = (body.stages ?? []) as Stage[]
-    // 兼任／借調才需要有效期間；本職為長期有效
+    // 借調才需要有效期間；本職機構內為長期有效
     const concurrent = !!body.concurrent
     const draft = { id: `ra${String(db.assignments.length + 1).padStart(2, '0')}x`, identityId: identity.id, roleCode: role.code, scopeId: scope.id, stages, concurrent, effectiveFrom: concurrent ? body.effectiveFrom ?? null : null, effectiveTo: concurrent ? body.effectiveTo ?? null : null, status: 'active' as const }
     const problem = validateAssignment(db, draft)
     if (problem) return bad(problem)
-    if (concurrent && (!draft.effectiveFrom || !draft.effectiveTo || !/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveTo) || draft.effectiveFrom > draft.effectiveTo)) return bad('兼任／借調必須填寫正確的有效期間')
+    if (concurrent && (!draft.effectiveFrom || !draft.effectiveTo || !/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(draft.effectiveTo) || draft.effectiveFrom > draft.effectiveTo)) return bad('借調必須填寫正確的有效期間')
     if (scope.stages && stages.some((x) => !scope.stages!.includes(x))) return bad('教育階段不在該學校的教育階段內')
-    if (db.assignments.some((a) => a.identityId === identity.id && a.roleCode === role.code && a.scopeId === scope.id && a.status === 'active' && (a.effectiveTo ?? '9999-12-31') >= (draft.effectiveFrom ?? '0000-01-01') && (a.effectiveFrom ?? '0000-01-01') <= (draft.effectiveTo ?? '9999-12-31'))) return bad('此身分在該範圍已有相同角色且期間重疊')
+    const sameAccount = new Set(db.identities.filter((i) => i.accountId === identity.accountId).map((i) => i.id))
+    if (db.assignments.some((a) => sameAccount.has(a.identityId) && a.roleCode === role.code && a.scopeId === scope.id && a.status === 'active' && (a.effectiveTo ?? '9999-12-31') >= (draft.effectiveFrom ?? '0000-01-01') && (a.effectiveFrom ?? '0000-01-01') <= (draft.effectiveTo ?? '9999-12-31'))) return bad('此帳號在該範圍已有相同角色且期間重疊')
+    const dup = primaryConflict(db, identity.accountId, draft)
+    if (dup) return bad(dup)
     db.assignments.push(draft)
     log('ALLOW', 'OK')
     return HttpResponse.json(draft, { status: 201 })
+  }),
+
+  // 撤銷一筆角色指派（授權與資料範圍檢查同指派）；本職主要角色在還有其他本職角色時不能先撤銷
+  http.post('*/api/admin/assignments/:id/revoke', async ({ request, params }) => {
+    const s = readSession(request)
+    if (!s) return unauthorized()
+    const r = resolveGated(s)
+    if ('reason' in r) return unauthorized(r.reason)
+    const { session } = r
+    const a = db.assignments.find((x) => x.id === params.id && x.status === 'active')
+    const identity = db.identities.find((i) => i.id === a?.identityId)
+    const acc = db.accounts.find((x) => x.id === identity?.accountId)
+    const role = db.roles.find((x) => x.code === a?.roleCode)
+    const log = (decision: 'ALLOW' | 'DENY', reason: ReasonCode) =>
+      logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'admin:update', target: `撤銷 ${role?.name ?? '-'} 自 ${acc?.name ?? '-'}`, decision, reason })
+    if (!a || !identity || !role) return HttpResponse.json({ error: 'invalid', message: '指派不存在' }, { status: 400 })
+    const gate = inSessionScope(db, session, identity.orgScopeId)
+      ? authorize(db, session, 'admin:update', { scopeId: a.scopeId })
+      : { allowed: false, reason: 'OUT_OF_SCOPE' as ReasonCode }
+    if (!gate.allowed) { log('DENY', gate.reason); return forbidden(gate.reason) }
+    const denied = assignmentDenial(db, session, role.code, a.scopeId)
+    if (denied) { log('DENY', denied); return forbidden(denied) }
+    const mine = new Set(db.identities.filter((i) => i.accountId === identity.accountId).map((i) => i.id))
+    const home = db.assignments.filter((x) => mine.has(x.identityId) && !x.concurrent && x.status === 'active')
+    if (!a.concurrent && home[0]?.id === a.id && home.length > 1) return HttpResponse.json({ error: 'invalid', message: '這是本職主要角色，請先撤銷同機構的其他角色' }, { status: 400 })
+    a.status = 'revoked'
+    log('ALLOW', 'OK')
+    return HttpResponse.json({ ok: true })
+  }),
+
+  // 新增身分：同一帳號可在多個機構任職（每個機構一個身分，再各自指派角色）
+  http.post('*/api/admin/identities', async ({ request }) => {
+    const s = readSession(request)
+    if (!s) return unauthorized()
+    const r = resolveGated(s)
+    if ('reason' in r) return unauthorized(r.reason)
+    const { session } = r
+    const body = (await request.json()) as { accountId: string; orgScopeId: string; jobTitle: string }
+    const acc = db.accounts.find((a) => a.id === body.accountId)
+    const org = db.scopes.find((x) => x.id === body.orgScopeId)
+    const log = (decision: 'ALLOW' | 'DENY', reason: ReasonCode) =>
+      logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'admin:update', target: `新增身分 ${org?.name ?? body.orgScopeId} 給 ${acc?.name ?? '-'}`, decision, reason })
+    const bad = (message: string) => HttpResponse.json({ error: 'invalid', message }, { status: 400 })
+    if (!acc || !org) return bad('帳號或機構不存在')
+    const jobTitle = (body.jobTitle ?? '').trim()
+    if (!jobTitle) return bad('請填寫職稱')
+    const gate = inSessionScope(db, session, org.id)
+      ? authorize(db, session, 'admin:update', { scopeId: org.id })
+      : { allowed: false, reason: 'OUT_OF_SCOPE' as ReasonCode }
+    if (!gate.allowed) { log('DENY', gate.reason); return forbidden(gate.reason) }
+    if (db.identities.some((i) => i.accountId === acc.id && i.orgScopeId === org.id && i.status !== 'ended')) return bad('此帳號在該機構已有身分，請直接在該身分下新增角色')
+    const identity = { id: `i${String(db.identities.length + 1).padStart(2, '0')}x`, accountId: acc.id, orgScopeId: org.id, jobTitle }
+    db.identities.push(identity)
+    log('ALLOW', 'OK')
+    return HttpResponse.json(identity, { status: 201 })
+  }),
+
+  // 調職、退休、離職：清空該身分（原機構）的所有角色指派並標記離任；帳號保留
+  http.post('*/api/admin/identities/:id/end', async ({ request, params }) => {
+    const s = readSession(request)
+    if (!s) return unauthorized()
+    const r = resolveGated(s)
+    if ('reason' in r) return unauthorized(r.reason)
+    const { session } = r
+    const body = (await request.json()) as { reason: EndReason }
+    const identity = db.identities.find((i) => i.id === params.id)
+    const acc = db.accounts.find((a) => a.id === identity?.accountId)
+    const org = db.scopes.find((x) => x.id === identity?.orgScopeId)
+    const log = (decision: 'ALLOW' | 'DENY', reason: ReasonCode, detail = '') =>
+      logAudit({ accountName: session.accountName, roleName: session.role.name, scopeId: session.assignment.scopeId, permission: 'admin:update', target: `${END_REASON_TEXT[body.reason] ?? '離任'} ${acc?.name ?? '-'}（${org?.name ?? '-'}）${detail}`, decision, reason })
+    if (!identity || !org) return HttpResponse.json({ error: 'invalid', message: '身分不存在' }, { status: 400 })
+    if (!['transfer', 'retire', 'resign'].includes(body.reason)) return HttpResponse.json({ error: 'invalid', message: '請選擇調職、退休或離職' }, { status: 400 })
+    if (identity.status === 'ended') return HttpResponse.json({ error: 'invalid', message: '此身分已離任' }, { status: 400 })
+    const gate = inSessionScope(db, session, org.id)
+      ? authorize(db, session, 'admin:update', { scopeId: org.id })
+      : { allowed: false, reason: 'OUT_OF_SCOPE' as ReasonCode }
+    if (!gate.allowed) { log('DENY', gate.reason); return forbidden(gate.reason) }
+    const cleared = endIdentity(db, identity.id, body.reason, today())
+    log('ALLOW', 'OK', cleared.length ? `，清空角色：${cleared.join('、')}` : '，原本無角色')
+    return HttpResponse.json({ ok: true, cleared })
   }),
 
   // 修改角色範本（角色與權限設定）：只有全國層的署管理員可修改，修改後立即對所有被指派此角色的人生效
   http.put('*/api/admin/roles/:code', async ({ request, params }) => {
     const s = readSession(request)
     if (!s) return unauthorized()
-    const r = resolveSession(db, s.accountId, s.identityId, today())
+    const r = resolveGated(s)
     if ('reason' in r) return unauthorized(r.reason)
     const { session } = r
     const role = db.roles.find((x) => x.code === params.code)

@@ -2,7 +2,9 @@
  * 所有後端呼叫都經過這裡。畫面元件不直接寫網址；
  * 之後接真實後端，只需要改這個檔案（例如帶登入憑證）。
  */
-export interface Session { accountId: string; identityId: string }
+import type { LoginMethod } from '../types'
+
+export interface Session { accountId: string; identityId: string; method: LoginMethod }
 
 const KEY = 'sen.session'
 export function loadSession(): Session | null {

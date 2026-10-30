@@ -1,5 +1,5 @@
 import type {
-  AuthTarget, Decision, MePermissions, RbacData, ReasonCode, Role, RoleAssignment, ScopeNode, ScopeType,
+  AuthTarget, Decision, EndReason, MePermissions, RbacData, ReasonCode, Role, RoleAssignment, ScopeNode, ScopeType,
 } from '../types'
 import { ACTION_LETTER } from '../types'
 
@@ -31,11 +31,26 @@ export function validateAssignment(data: RbacData, a: RoleAssignment): string | 
   const role = data.roles.find((r) => r.code === a.roleCode)
   const scope = data.scopes.find((s) => s.id === a.scopeId)
   if (!role || !scope) return '角色或範圍不存在'
-  if (a.concurrent && (!a.effectiveFrom || !a.effectiveTo)) return '兼任／借調必須填寫有效期間'
+  if (a.concurrent && (!a.effectiveFrom || !a.effectiveTo)) return '借調必須填寫有效期間'
   if (RANK[scope.type] < RANK[role.maxScope]) {
     return `「${role.name}」最高只能指派到 ${role.maxScope} 層，不可指派到 ${scope.type}`
   }
   return null
+}
+
+/**
+ * 本職規則：每個帳號只有一個本職機構（主要角色＋同機構的其他角色，長期有效）；
+ * 在外部單位（非本職機構）的角色一律為借調（須有效期間），本職機構內不需借調。
+ */
+export function primaryConflict(data: RbacData, accountId: string, draft: RoleAssignment): string | null {
+  const ids = data.identities.filter((i) => i.accountId === accountId)
+  const idSet = new Set(ids.map((i) => i.id))
+  const orgOf = (identityId: string) => ids.find((i) => i.id === identityId)?.orgScopeId
+  const homeOrgs = new Set(data.assignments.filter((a) => idSet.has(a.identityId) && !a.concurrent && a.status === 'active' && a.id !== draft.id).map((a) => orgOf(a.identityId)))
+  const org = orgOf(draft.identityId)
+  if (homeOrgs.size === 0) return null
+  if (draft.concurrent) return homeOrgs.has(org) ? '本職機構內的角色不需借調（長期有效）' : null
+  return homeOrgs.has(org) ? null : '此帳號的本職只有一個機構；在其他（外部）單位的角色請指派為借調並填寫有效期間'
 }
 
 /** 分區組成檢查：行政區／鄉鎮必須屬於同縣市的某個分區；學校所在行政區須屬於其上層分區 */
@@ -196,6 +211,53 @@ export function diffRole(before: Role, after: RoleEdit): string[] {
   return out
 }
 
+/**
+ * 離任（調職、退休、離職，或教育雲端學校代碼異動）：清空該身分的所有角色指派，並標記為已離任。
+ * 帳號本身與個人資料保留。回傳被清空的角色名稱，供稽核紀錄使用。
+ */
+export function endIdentity(data: RbacData, identityId: string, reason: EndReason, now: string): string[] {
+  const identity = data.identities.find((i) => i.id === identityId)
+  if (!identity || identity.status === 'ended') return []
+  const mine = data.assignments.filter((a) => a.identityId === identityId)
+  const names = mine.map((a) => data.roles.find((r) => r.code === a.roleCode)?.name ?? a.roleCode)
+  data.assignments = data.assignments.filter((a) => a.identityId !== identityId)
+  identity.status = 'ended'
+  identity.endReason = reason
+  identity.endedAt = now
+  return names
+}
+
+export interface AffiliationChange {
+  kind: 'ended' | 'created'
+  identityId: string
+  orgScopeId: string
+  clearedRoles: string[]
+}
+
+/**
+ * 教育雲端登入時同步任職機構（教育雲端一定帶學校代碼）：
+ * 1. 首次登入的新使用者（還沒有該校的在職身分）→ 建立該校的身分，預設不指派角色；
+ * 2. 系統記錄的在職學校不在教育雲端回傳的學校代碼內 → 清空原學校身分的角色並標記離任，新學校建立身分、無角色；
+ * 3. 縣市、署等非學校的身分不受影響；學校代碼為空或不存在時不做任何變更。
+ */
+export function syncSsoAffiliation(data: RbacData, accountId: string, schoolIds: string[], now: string, jobTitle = '待確認'): AffiliationChange[] {
+  const valid = schoolIds.filter((id) => data.scopes.some((s) => s.id === id && s.type === 'SCHOOL'))
+  if (valid.length === 0) return []
+  const out: AffiliationChange[] = []
+  const isSchool = (orgId: string) => data.scopes.find((s) => s.id === orgId)?.type === 'SCHOOL'
+  for (const i of data.identities.filter((x) => x.accountId === accountId && x.status !== 'ended' && isSchool(x.orgScopeId))) {
+    if (valid.includes(i.orgScopeId)) continue
+    out.push({ kind: 'ended', identityId: i.id, orgScopeId: i.orgScopeId, clearedRoles: endIdentity(data, i.id, 'school_changed', now) })
+  }
+  for (const sid of valid) {
+    if (data.identities.some((x) => x.accountId === accountId && x.orgScopeId === sid && x.status !== 'ended')) continue
+    const identity = { id: `i${String(data.identities.length + 1).padStart(2, '0')}s`, accountId, orgScopeId: sid, jobTitle }
+    data.identities.push(identity)
+    out.push({ kind: 'created', identityId: identity.id, orgScopeId: sid, clearedRoles: [] })
+  }
+  return out
+}
+
 export function isWithinPeriod(a: RoleAssignment, now: string): boolean {
   return a.status === 'active' && (!a.effectiveFrom || a.effectiveFrom <= now) && (!a.effectiveTo || now <= a.effectiveTo)
 }
@@ -285,4 +347,6 @@ export const REASON_TEXT: Record<ReasonCode, string> = {
   NO_RELATION: '與該學生沒有責任關係',
   ROLE_NOT_DELEGABLE: '此角色層級高於您的角色，不可由您指派',
   SCHOOL_ADMIN_RULE: '學校管理員：署轄學校由署端管理員指派，其餘學校由縣市管理員指派',
+  PROFILE_INCOMPLETE: '個人資料未補齊（身分證或聯絡方式），請先到個人資料頁完成',
+  ID_PENDING: '身分證已送出，等待管理員核對後才能使用',
 }

@@ -1,6 +1,7 @@
 import type {
   AdminArea, Account, Identity, RbacData, Responsibility, Role, RoleAssignment, ScopeNode, Stage, Student,
 } from '../types'
+import { DEFAULT_PROFILE_SETTINGS, guidOf, idHash, makeTestId, maskId } from '../auth/profile'
 
 /* 全部為合成資料：組織、學校、人名皆為虛構，不含任何真實帳號或個資。 */
 
@@ -87,6 +88,9 @@ export const ROLES: Role[] = [
   },
 ]
 
+/** 合成號碼（通過檢查碼的虛構資料），僅供示範；a11 的教育雲端 guid 會對應此號碼 */
+export const DEMO_ID_A11 = makeTestId('Y', 2, '0000011')
+
 export const ACCOUNTS: Account[] = [
   { id: 'a01', username: 'nea_admin', name: '王署管', email: 'a01@example.test', status: 'active' },
   { id: 'a02', username: 'ident_center01', name: '林鑑定', email: 'a02@example.test', status: 'active' },
@@ -98,8 +102,11 @@ export const ACCOUNTS: Account[] = [
   { id: 'a08', username: 'publisher01', name: '趙出版', email: 'a08@example.test', status: 'active' },
   { id: 'a09', username: 'sa2_admin', name: '周校管', email: 'a09@example.test', status: 'active', note: '角色指派已到期' },
   { id: 'a10', username: 'sb1_admin', name: '鄭停用', email: 'a10@example.test', status: 'locked', note: '帳號已鎖定' },
-  { id: 'a12', username: 'sn1_staff', name: '謝署轄', email: 'a12@example.test', status: 'active', note: '署轄學校新進人員，尚未指派學校管理員' },
-  { id: 'a11', username: 'sa1_teacher02', name: '許新進', email: 'a11@example.test', status: 'active', note: '新進教師，尚未指派角色' },
+  { id: 'a12', username: 'sn1_staff', name: '謝署轄', email: 'a12@example.test', status: 'active', note: '署轄學校新進人員，尚未指派學校管理員。示範：教育雲端未提供 guid，自填身分證需管理員核對' },
+  { id: 'a13', username: 'multi_teacher', name: '蔡兼課', email: 'a13@example.test', status: 'active', note: '示範：本職為甲市第一國小特教教師；同校另有學校管理員角色（長期有效）；借調甲市第二國小特教教師（外部單位，有效期間）' },
+  { id: 'a14', username: 'sso_new_teacher', name: '孫首登', email: 'a14@example.test', status: 'active', note: '示範（教育雲端登入）：首次登入的新使用者，教育雲端帶學校代碼（甲市第一國小），系統建立任職機構，預設不指派角色' },
+  { id: 'a15', username: 'sso_moved_teacher', name: '何調校', email: 'a15@example.test', status: 'active', note: '示範（教育雲端登入）：系統記錄任職於甲市第二國小並有教師角色，但教育雲端回傳學校代碼為甲市第三國小 → 清空原角色，改任第三國小、無角色' },
+  { id: 'a11', username: 'sa1_teacher02', name: '許新進', email: 'a11@example.test', status: 'active', note: `新進教師，尚未指派角色。示範：教育雲端會回傳 guid，對應身分證 ${DEMO_ID_A11}；填其他號碼會被擋下` },
 ]
 
 export const IDENTITIES: Identity[] = [
@@ -115,12 +122,15 @@ export const IDENTITIES: Identity[] = [
   { id: 'i09', accountId: 'a09', orgScopeId: 'sA2', jobTitle: '特教組長' },
   { id: 'i10', accountId: 'a10', orgScopeId: 'sB1', jobTitle: '特教組長' },
   { id: 'i12', accountId: 'a12', orgScopeId: 'sN1', jobTitle: '特教組長' },
+  { id: 'i13a', accountId: 'a13', orgScopeId: 'sA1', jobTitle: '特教教師' },
+  { id: 'i13b', accountId: 'a13', orgScopeId: 'sA2', jobTitle: '特教教師' },
+  { id: 'i15', accountId: 'a15', orgScopeId: 'sA2', jobTitle: '特教教師' },
   { id: 'i11', accountId: 'a11', orgScopeId: 'sA1', jobTitle: '特教教師' },
 ]
 
 const FROM = '2026-08-01'
 const TO = '2027-07-31'
-/** 本職：長期有效（無期間）。兼任／借調：必須有有效期間。 */
+/** 本職：長期有效（無期間）。借調（外部單位）：必須有有效期間。 */
 const ra = (id: string, identityId: string, roleCode: string, scopeId: string, stages: Stage[] = []): RoleAssignment =>
   ({ id, identityId, roleCode, scopeId, stages, concurrent: false, effectiveFrom: null, effectiveTo: null, status: 'active' })
 const rc = (id: string, identityId: string, roleCode: string, scopeId: string, stages: Stage[] = [], to = TO): RoleAssignment =>
@@ -138,6 +148,10 @@ export const ASSIGNMENTS: RoleAssignment[] = [
   ra('ra08', 'i08', 'PUBLISHER', 'nea'),
   rc('ra09', 'i09', 'SCHOOL_ADMIN', 'sA2', ['國中'], '2026-06-30'),
   ra('ra10', 'i10', 'SCHOOL_ADMIN', 'sB1', ['國小']),
+  ra('ra15', 'i15', 'TEACHER', 'sA2', ['國中']),
+  ra('ra13a', 'i13a', 'TEACHER', 'sA1', ['國小']),
+  ra('ra13b', 'i13a', 'SCHOOL_ADMIN', 'sA1', ['國小']),
+  rc('ra13c', 'i13b', 'TEACHER', 'sA2', ['國中']),
 ]
 
 const SURNAMES = ['陳', '林', '黃', '張', '李', '王', '吳', '劉', '蔡', '楊']
@@ -173,16 +187,26 @@ export const RESPONSIBILITIES: Responsibility[] = STUDENTS.filter((s) => s.schoo
   .slice(0, 2)
   .map((s) => ({ assignmentId: 'ra06', studentId: s.id }))
 
+/** 示範帳號：除 a11、a12 兩位新進人員外，其餘都已有「已驗證」的合成身分證與已驗證電子郵件 */
+function seedAccount(a: Account, idx: number): Account {
+  if (a.id === 'a11' || a.id === 'a12') return { ...a, idStatus: 'none', contactVerified: {} }
+  const id = makeTestId('Z', 1, String(1000100 + idx))
+  return { ...a, idHash: idHash(id), idMasked: maskId(id), idStatus: 'verified', contactVerified: { email: true } }
+}
+
 export function createRbacData(): RbacData {
   return {
     scopes: SCOPES,
     areas: AREAS,
     // 角色範本可被署管理員修改：每份資料各自複製，避免改到常數
     roles: ROLES.map((r) => ({ ...r, grants: { ...r.grants } })),
-    accounts: ACCOUNTS,
-    identities: IDENTITIES,
-    assignments: ASSIGNMENTS,
+    accounts: ACCOUNTS.map(seedAccount),
+    identities: IDENTITIES.map((i) => ({ ...i })),
+    assignments: ASSIGNMENTS.map((a) => ({ ...a, stages: [...a.stages] })),
     students: STUDENTS.map((s) => ({ ...s })),
     responsibilities: RESPONSIBILITIES,
+    profileSettings: { ...DEFAULT_PROFILE_SETTINGS, contactFields: [...DEFAULT_PROFILE_SETTINGS.contactFields] },
+    ssoGuids: { a11: guidOf(DEMO_ID_A11) },
+    ssoProfiles: { a14: { schoolIds: ['sA1'], jobTitle: '特教教師' }, a15: { schoolIds: ['sA3'], jobTitle: '特教教師' } },
   }
 }
