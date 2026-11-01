@@ -172,6 +172,7 @@ export interface RoleAssignment {
 export interface Student {
   id: string
   name: string
+  gender: '男' | '女'
   schoolId: string
   stage: Stage
   grade: string

@@ -81,7 +81,7 @@ describe('114 → 115 學年度年度匯入', () => {
   it('套用後：改制沿用原學校、停辦設為廢校、新設校建立並掛到正確分區', () => {
     const data = createRbacData()
     const before = data.scopes.find((x) => x.school?.code === '141307')!
-    const { done } = applyImport(data, mergeMoe(files115()), {}, '王署管', NOW, 2)
+    const { done } = applyImport(data, mergeMoe(files115()), {}, '王怡君', NOW, 2)
     expect(done.recode).toBeGreaterThan(0)
     const after = data.scopes.find((x) => x.school?.code === '141502')!
     expect(after.id).toBe(before.id)                           // 同一節點：帳號、角色、學生不受影響
@@ -105,7 +105,7 @@ describe('114 → 115 學年度年度匯入', () => {
 
   it('廢校不能再選為任職機構，停招與未啟用仍可', () => {
     const data = createRbacData()
-    applyImport(data, mergeMoe(files115()), {}, '王署管', NOW, 2)
+    applyImport(data, mergeMoe(files115()), {}, '王怡君', NOW, 2)
     const closed = data.scopes.find((x) => x.school?.code === '084514')!
     const prep = data.scopes.find((x) => x.school?.code === '183301')!
     expect(orgSelectable(closed)).toBe(false)
@@ -117,7 +117,7 @@ describe('114 → 115 學年度年度匯入', () => {
   it('同一份名錄重複匯入不會再產生異動', () => {
     const data = createRbacData()
     const batch = mergeMoe(files115())
-    applyImport(data, batch, {}, '王署管', NOW, 2)
+    applyImport(data, batch, {}, '王怡君', NOW, 2)
     const again = previewImport(data, batch)
     expect(again.items.filter((i) => i.kind !== 'missing' && i.kind !== 'status')).toEqual([])
   })
@@ -126,7 +126,7 @@ describe('114 → 115 學年度年度匯入', () => {
     const data = createRbacData()
     const seed = data.scopes.find((x) => x.school?.code === '014601')!.school!
     expect(seed).toMatchObject({ importId: 1, lastChange: { kind: 'import', importId: 1, year: 114 } })
-    applyImport(data, mergeMoe(files115()), {}, '王署管', NOW, 2)
+    applyImport(data, mergeMoe(files115()), {}, '王怡君', NOW, 2)
     const sc = (code: string) => data.scopes.find((x) => x.school?.code === code)!.school!
     // 115 名錄有列、資料無差異：最近匯入改為 #2，最後異動仍是 #1（114 學年度）
     const same = data.scopes.filter((x) => x.school?.importId === 2 && x.school.lastChange.kind === 'import' && x.school.lastChange.importId === 1)
@@ -168,10 +168,10 @@ describe('114 → 115 學年度年度匯入', () => {
     const br = data.scopes.find((x) => x.school?.code === '011XA8-01')!
     data.identities.push({ id: 'ix', accountId: 'a06', orgScopeId: br.id, jobTitle: '教保員' })
     main.school!.branches = []
-    syncBranches(data, main, { year: 115, by: '王署管', now: NOW, importId: 2 })
+    syncBranches(data, main, { year: 115, by: '王怡君', now: NOW, importId: 2 })
     expect(br.school!.status).toBe('closing')
     main.school!.status = 'closed'
-    syncBranches(data, main, { year: 115, by: '王署管', now: NOW, importId: 2 })
+    syncBranches(data, main, { year: 115, by: '王怡君', now: NOW, importId: 2 })
     expect(br.school!.status).toBe('closed')
     expect(orgSelectable(br)).toBe(false)
   })

@@ -8,10 +8,11 @@ import { DEFAULT_PROFILE_SETTINGS, guidOf, idHash, makeTestId, maskId } from '..
 import seed from './moeSeed.json'
 import type { SchoolLevel } from '../schools/moe'
 import { createSchoolNode } from '../schools/schoolData'
+import { makeName, pickWeighted, seededRandom, shuffle, type Gender } from './mockIdentity'
 
 /*
  * 學校、縣市、鄉鎮市區：教育部統計處 114 學年度各級學校名錄（真實學校代碼與資料，見 moeSeed.json）。
- * 人員、帳號、學生：全部為合成資料，不含任何真實帳號或個資。
+ * 人員、帳號、學生：全部為合成資料（姓名以虛擬身分產生器產生），不含任何真實帳號或個資。
  * 分區：新北市採實際 9 大分區；臺中市示範兩個分區（實際組成待提供）；其餘縣市先以「全區」一個分區呈現。
  */
 
@@ -140,21 +141,21 @@ export const ROLES: Role[] = [
 export const DEMO_ID_A11 = makeTestId('Y', 2, '0000011')
 
 export const ACCOUNTS: Account[] = [
-  { id: 'a01', username: 'nea_admin', name: '王署管', email: 'a01@example.test', status: 'active' },
-  { id: 'a02', username: 'ident_center01', name: '林鑑定', email: 'a02@example.test', status: 'active' },
-  { id: 'a03', username: 'citya_staff', name: '陳局處', email: 'a03@example.test', status: 'active' },
-  { id: 'a04', username: 'citya_d1', name: '黃分區', email: 'a04@example.test', status: 'active' },
-  { id: 'a05', username: 'sa1_admin', name: '張組長', email: 'a05@example.test', status: 'active', note: '多身分：學校管理員＋巡迴輔導教師' },
-  { id: 'a06', username: 'sa1_teacher01', name: '李老師', email: 'a06@example.test', status: 'active' },
-  { id: 'a07', username: 'sa1_aide01', name: '吳助理', email: 'a07@example.test', status: 'active' },
-  { id: 'a08', username: 'publisher01', name: '趙出版', email: 'a08@example.test', status: 'active' },
-  { id: 'a09', username: 'sa2_admin', name: '周校管', email: 'a09@example.test', status: 'active', note: '角色指派已到期' },
-  { id: 'a10', username: 'sb1_admin', name: '鄭停用', email: 'a10@example.test', status: 'locked', note: '帳號已鎖定' },
-  { id: 'a12', username: 'sn1_staff', name: '謝署轄', email: 'a12@example.test', status: 'active', note: '署轄學校新進人員，尚未指派學校管理員。示範：教育雲端未提供 guid，自填身分證需管理員核對' },
-  { id: 'a13', username: 'multi_teacher', name: '蔡兼課', email: 'a13@example.test', status: 'active', note: '示範：本職為新北市板橋國小特教教師；同校另有學校管理員角色（長期有效）；借調新北市中和國中特教教師（外部單位，有效期間）' },
-  { id: 'a14', username: 'sso_new_teacher', name: '孫首登', email: 'a14@example.test', status: 'active', note: '示範（教育雲端登入）：首次登入的新使用者，教育雲端帶學校代碼（新北市板橋國小），系統建立任職機構，預設不指派角色' },
-  { id: 'a15', username: 'sso_moved_teacher', name: '何調校', email: 'a15@example.test', status: 'active', note: '示範（教育雲端登入）：系統記錄任職於新北市中和國中並有教師角色，但教育雲端回傳學校代碼為新北市三重高中 → 清空原角色，改任三重高中、無角色' },
-  { id: 'a11', username: 'sa1_teacher02', name: '許新進', email: 'a11@example.test', status: 'active', note: `新進教師，尚未指派角色。示範：教育雲端會回傳 guid，對應身分證 ${DEMO_ID_A11}；填其他號碼會被擋下` },
+  { id: 'a01', username: 'nea_admin', name: '王怡君', email: 'a01@example.test', status: 'active' },
+  { id: 'a02', username: 'ident_center01', name: '林志明', email: 'a02@example.test', status: 'active' },
+  { id: 'a03', username: 'citya_staff', name: '陳美玲', email: 'a03@example.test', status: 'active' },
+  { id: 'a04', username: 'citya_d1', name: '黃建宏', email: 'a04@example.test', status: 'active' },
+  { id: 'a05', username: 'sa1_admin', name: '張雅婷', email: 'a05@example.test', status: 'active', note: '多身分：學校管理員＋巡迴輔導教師' },
+  { id: 'a06', username: 'sa1_teacher01', name: '李俊傑', email: 'a06@example.test', status: 'active' },
+  { id: 'a07', username: 'sa1_aide01', name: '吳淑芬', email: 'a07@example.test', status: 'active' },
+  { id: 'a08', username: 'publisher01', name: '趙冠宇', email: 'a08@example.test', status: 'active' },
+  { id: 'a09', username: 'sa2_admin', name: '周佩珊', email: 'a09@example.test', status: 'active', note: '角色指派已到期' },
+  { id: 'a10', username: 'sb1_admin', name: '鄭家豪', email: 'a10@example.test', status: 'locked', note: '帳號已鎖定' },
+  { id: 'a12', username: 'sn1_staff', name: '謝欣怡', email: 'a12@example.test', status: 'active', note: '署轄學校新進人員，尚未指派學校管理員。示範：教育雲端未提供 guid，自填身分證需管理員核對' },
+  { id: 'a13', username: 'multi_teacher', name: '蔡宗翰', email: 'a13@example.test', status: 'active', note: '示範：本職為新北市板橋國小特教教師；同校另有學校管理員角色（長期有效）；借調新北市中和國中特教教師（外部單位，有效期間）' },
+  { id: 'a14', username: 'sso_new_teacher', name: '孫若涵', email: 'a14@example.test', status: 'active', note: '示範（教育雲端登入）：首次登入的新使用者，教育雲端帶學校代碼（新北市板橋國小），系統建立任職機構，預設不指派角色' },
+  { id: 'a15', username: 'sso_moved_teacher', name: '何承恩', email: 'a15@example.test', status: 'active', note: '示範（教育雲端登入）：系統記錄任職於新北市中和國中並有教師角色，但教育雲端回傳學校代碼為新北市三重高中 → 清空原角色，改任三重高中、無角色' },
+  { id: 'a11', username: 'sa1_teacher02', name: '許志豪', email: 'a11@example.test', status: 'active', note: `新進教師，尚未指派角色。示範：教育雲端會回傳 guid，對應身分證 ${DEMO_ID_A11}；填其他號碼會被擋下` },
 ]
 
 export const IDENTITIES: Identity[] = [
@@ -202,36 +203,51 @@ export const ASSIGNMENTS: RoleAssignment[] = [
   rc('ra13c', 'i13b', 'TEACHER', 'sA2', ['國中']),
 ]
 
-const SURNAMES = ['陳', '林', '黃', '張', '李', '王', '吳', '劉', '蔡', '楊']
-const GIVEN = ['小明', '小華', '小美', '小安', '小宇', '小晴', '小恩', '小翔']
-const CATEGORIES = ['智能障礙', '自閉症', '學習障礙', '聽覺障礙', '肢體障礙', '情緒行為障礙', '資賦優異']
+const CATEGORIES: [string, number][] = [
+  ['學習障礙', 30], ['智能障礙', 18], ['自閉症', 16], ['情緒行為障礙', 8], ['其他障礙', 5], ['肢體障礙', 4],
+  ['聽覺障礙', 3], ['語言障礙', 3], ['多重障礙', 3], ['視覺障礙', 2], ['資賦優異', 8],
+]
+/** 每個教育階段的完整年級 */
 const GRADES: Record<Stage, string[]> = {
-  學前: ['大班'], 國小: ['一年級', '三年級', '五年級'], 國中: ['七年級', '八年級', '九年級'], 高中職: ['十年級', '十一年級'], 大專: ['一年級'],
+  學前: ['幼幼班', '小班', '中班', '大班'],
+  國小: ['一年級', '二年級', '三年級', '四年級', '五年級', '六年級'],
+  國中: ['七年級', '八年級', '九年級'],
+  高中職: ['十年級', '十一年級', '十二年級'],
+  大專: ['一年級', '二年級', '三年級', '四年級'],
 }
 
+/**
+ * 學生：以虛擬身分產生器建立。只為示範帳號所在的學校產生；
+ * 每所學校的每個年級約 50 名（46–54）；
+ * 男女比例每個年級約 6:4 或 5.5:4.5（男生比例 55%–60%）。
+ */
 function buildStudents(): Student[] {
+  const rnd = seededRandom(20261102)
+  const used = new Set(ACCOUNTS.map((a) => a.name))
+  const schools = Object.values(DEMO_SCHOOL_IDS).map((id) => SCOPES.find((x) => x.id === id)!)
+  const stageOrder: Stage[] = ['學前', '國小', '國中', '高中職', '大專']
   const out: Student[] = []
-  let n = 0
-  // 只為示範帳號所在的學校產生合成學生
-  for (const s of Object.values(DEMO_SCHOOL_IDS).map((id) => SCOPES.find((x) => x.id === id)!)) {
-    const stage = s.stages![0]
-    for (let k = 0; k < 4; k++, n++) {
-      out.push({
-        id: `st${String(n + 1).padStart(3, '0')}`,
-        name: SURNAMES[n % SURNAMES.length] + GIVEN[(n * 3) % GIVEN.length],
-        schoolId: s.id,
-        stage,
-        grade: GRADES[stage][k % GRADES[stage].length],
-        category: CATEGORIES[(n * 2) % CATEGORIES.length],
-      })
+  for (const school of schools) {
+    for (const stage of stageOrder.filter((x) => school.stages?.includes(x))) {
+      for (const grade of GRADES[stage]) {
+        const total = 46 + Math.floor(rnd() * 9)
+        const maleRatio = rnd() < 0.5 ? 0.6 : 0.55
+        const males = Math.round(total * maleRatio)
+        const genders = shuffle(rnd, Array.from({ length: total }, (_, i): Gender => (i < males ? '男' : '女')))
+        for (const gender of genders) {
+          out.push({ id: '', name: makeName(rnd, gender, used), gender, schoolId: school.id, stage, grade, category: pickWeighted(rnd, CATEGORIES) })
+        }
+      }
     }
   }
+  // 依示範學校順序產生（板橋國小在前，責任關係示範取該校前兩位），再編號
+  out.forEach((s, i) => { s.id = `st${String(i + 1).padStart(4, '0')}` })
   return out
 }
 
 export const STUDENTS: Student[] = buildStudents()
 
-/** 教師 ra06 只負責光明國小的前兩位學生 */
+/** 教師 ra06 只負責板橋國小的前兩位學生 */
 export const RESPONSIBILITIES: Responsibility[] = STUDENTS.filter((s) => s.schoolId === 'sA1')
   .slice(0, 2)
   .map((s) => ({ assignmentId: 'ra06', studentId: s.id }))

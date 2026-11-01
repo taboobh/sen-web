@@ -88,7 +88,7 @@ describe('授權引擎', () => {
 
   it('登入帳號：英文字母、數字、_、-，且以英文字母開頭', () => {
     for (const ok of ['abc', 'a1', 'Sa1_admin', 'a-b_c9']) expect(validateUsername(ok)).toBeNull()
-    for (const bad of ['', '1abc', '_abc', '-abc', '王署管', 'ab c', 'ab.c', 'ab@c']) expect(validateUsername(bad)).not.toBeNull()
+    for (const bad of ['', '1abc', '_abc', '-abc', '王怡君', 'ab c', 'ab.c', 'ab@c']) expect(validateUsername(bad)).not.toBeNull()
     expect(validateAccounts(data)).toEqual([])
     const dup = { ...data, accounts: [...data.accounts, { ...data.accounts[0], id: 'zz', username: data.accounts[0].username.toUpperCase() }] }
     expect(validateAccounts(dup).length).toBeGreaterThan(0)
@@ -273,14 +273,14 @@ describe('教育雲端學校代碼同步與離任', () => {
     expect(syncSsoAffiliation(d, 'a06', ['sA1'], NOWD)).toEqual([])
     expect(syncSsoAffiliation(d, 'a06', [], NOWD)).toEqual([])
     expect(syncSsoAffiliation(d, 'a06', ['nope'], NOWD)).toEqual([])
-    syncSsoAffiliation(d, 'a05', ['sA1'], NOWD)               // 張組長：學校身分相符，縣市巡輔身分保留
+    syncSsoAffiliation(d, 'a05', ['sA1'], NOWD)               // 張雅婷：學校身分相符，縣市巡輔身分保留
     expect(d.identities.find((i) => i.id === 'i05b')!.status).toBeUndefined()
     expect(d.assignments.some((a) => a.id === 'ra05b')).toBe(true)
   })
 
   it('同一帳號多校：只清空不在教育雲端學校代碼內的學校', () => {
     const d = fresh()
-    syncSsoAffiliation(d, 'a13', ['sA1'], NOWD)               // 蔡兼課原在 sA1、sA2
+    syncSsoAffiliation(d, 'a13', ['sA1'], NOWD)               // 蔡宗翰原在 sA1、sA2
     expect(d.identities.find((i) => i.id === 'i13a')!.status).toBeUndefined()
     expect(d.identities.find((i) => i.id === 'i13b')!.status).toBe('ended')
     expect(d.assignments.filter((a) => a.identityId === 'i13a').length).toBe(2)

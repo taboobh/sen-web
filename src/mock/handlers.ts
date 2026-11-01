@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import type { AuthTarget, ReasonCode, Stage } from '../types'
+import type { AuthTarget, ReasonCode, Stage, Student } from '../types'
 import { END_REASON_TEXT, type EndReason } from '../types'
 import { REASON_TEXT, orgBlockedText, endIdentity, syncSsoAffiliation, assignableScopes, canEditRoles, diffRole, normalizeGrants, validateRoleEdit, type RoleEdit, assignmentDenial, authorize, buildMePermissions, delegableRoles, inSessionScope, validateAssignment, validateDistrictAreas, primaryConflict } from '../auth/engine'
 import { audit, db, logAudit } from './state'
@@ -9,6 +9,7 @@ import { schoolHandlers } from './schoolHandlers'
 import { profileGate } from '../auth/profile'
 import type { LoginMethod } from '../types'
 import { MODULES } from './modules'
+import { makeName, type Gender } from './mockIdentity'
 
 /**
  * 假後端：規則與未來真實後端相同——每個請求都依「帳號＋目前身分」重新判斷授權。
@@ -106,8 +107,10 @@ export const handlers = [
     // 學校狀態：停招不收新生、籌備處尚未開學、廢校不可新增
     const st = school.school?.status ?? 'active'
     if (st !== 'active') return HttpResponse.json({ error: 'invalid', message: `${school.name} 目前為「${st === 'closing' ? '停招' : st === 'preparing' ? '未啟用（籌備處）' : '廢校／停辦'}」，不能新增學生` }, { status: 400 })
-    const n = db.students.length + 1
-    const created = { id: `st${String(n).padStart(3, '0')}`, name: `新增學生${n}`, schoolId: school.id, stage: school.stages![0], grade: '一年級', category: '待鑑定' }
+    const n = Math.max(0, ...db.students.map((x) => Number(x.id.slice(2)) || 0)) + 1
+    const gender: Gender = Math.random() < 0.58 ? '男' : '女'
+    const name = makeName(Math.random, gender, new Set([...db.students.map((x) => x.name), ...db.accounts.map((a) => a.name)]))
+    const created: Student = { id: `st${String(n).padStart(4, '0')}`, name, gender, schoolId: school.id, stage: school.stages![0], grade: '一年級', category: '待鑑定' }
     db.students.push(created)
     return HttpResponse.json(created, { status: 201 })
   }),

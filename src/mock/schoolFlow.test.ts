@@ -81,7 +81,7 @@ describe('學校改過的電話，名錄匯入不覆寫', () => {
     sA1.school!.phoneBySchool = true
     const it = previewImport(db, batch).items.find((i) => i.code === '014601')
     expect(it?.fields.some((f) => f.key === 'phone') ?? false).toBe(false)
-    applyImport(db, batch, {}, '王署管', '2026-08-05', 2)
+    applyImport(db, batch, {}, '王怡君', '2026-08-05', 2)
     expect(sA1.school!.phone).toBe('(02)0000-0000')
     // 沒被學校改過的學校，電話仍以名錄為準
     const other = db.scopes.find((x) => x.id === 'sA4')!

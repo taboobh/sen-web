@@ -50,6 +50,7 @@ export default function StudentTable() {
         onExport={(n) => msg.info(`已匯出 ${n} 筆（匯出需有「匯出」權限，正式版會寫入稽核）`)}
         columns={[
           { key: 'name', title: '姓名', value: (r) => r.name },
+          { key: 'gender', title: '性別', value: (r) => r.gender },
           { key: 'school', title: '學校', value: (r) => r.schoolName },
           { key: 'stage', title: '教育階段', value: (r) => r.stage, render: (r) => <Tag>{r.stage}</Tag> },
           { key: 'grade', title: '年級', value: (r) => r.grade },
