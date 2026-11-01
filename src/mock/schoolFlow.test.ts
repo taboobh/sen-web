@@ -22,7 +22,7 @@ async function call(path: string, method = 'GET', session?: Sess, body?: unknown
 }
 const NEA: Sess = { accountId: 'a01', identityId: 'i01', method: 'local' }       // 署管理員
 const CITY: Sess = { accountId: 'a03', identityId: 'i03', method: 'local' }      // 新北市教育局承辦
-const DIST: Sess = { accountId: 'a04', identityId: 'i04', method: 'local' }      // 新北市第一分區管理員
+const DIST: Sess = { accountId: 'a04', identityId: 'i04', method: 'local' }      // 新北市板橋分區管理員
 const SCHOOL: Sess = { accountId: 'a05', identityId: 'i05a', method: 'local' }   // 板橋國小（sA1）學校管理員
 const TEACHER: Sess = { accountId: 'a06', identityId: 'i06', method: 'local' }   // 板橋國小特教教師
 const self = { phone: '(02)2968-6990', principal: '陳校長', contactName: '林主任', contactTitle: '學務主任', contactPhone: '(02)2968-6990#120', contactEmail: 'pr@example.test' }
@@ -66,7 +66,7 @@ describe('署管理員：新增、修改', () => {
     const body = { code: '01X999', name: '市立測試國小籌備處', levels: ['國小'], city: '新北市', address: '新北市板橋區測試路1號', status: 'preparing' }
     const r = await call('/schools', 'POST', NEA, body)
     expect(r.status).toBe(201)
-    expect(r.json).toMatchObject({ status: 'preparing', source: 'manual', district: '新北市第一分區（示範）' })
+    expect(r.json).toMatchObject({ status: 'preparing', source: 'manual', district: '板橋分區' })
     expect(r.json).toMatchObject({ importId: null, lastChange: { kind: 'manual', action: 'create' } })
     expect((await call('/schools', 'POST', NEA, body)).status).toBe(400)
   })
@@ -100,6 +100,6 @@ describe('分班可選為本職機構', () => {
   it('分班清單顯示所屬分區（同母園）', async () => {
     const r = await call('/schools', 'GET', NEA)
     const row = r.json!.rows.find((x: { code: string }) => x.code === '011XA8-01')
-    expect(row).toMatchObject({ branchOf: '011XA8', district: '新北市第一分區（示範）' })
+    expect(row).toMatchObject({ branchOf: '011XA8', district: '板橋分區' })
   })
 })

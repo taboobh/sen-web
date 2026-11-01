@@ -74,6 +74,14 @@ describe('授權引擎', () => {
     expect(multi.length).toBeGreaterThan(1)
     const banqiao = data.areas.find((a) => a.name === '新北市板橋區')!
     expect(banqiao.districtId).toBe('cityA-d1')
+    // 新北市 9 大分區：29 個行政區全部歸到指定分區
+    const ntpc = data.scopes.filter((x) => x.type === 'DISTRICT' && x.parentId === 'cityA').map((x) => x.name)
+    expect(ntpc).toEqual(['板橋分區', '雙和分區', '三重分區', '新莊分區', '文山分區', '三鶯分區', '淡水分區', '七星分區', '瑞芳分區'])
+    const nameOf = (id: string) => data.scopes.find((x) => x.id === id)!.name
+    const ofTown = (t: string) => nameOf(data.areas.find((a) => a.name === `新北市${t}`)!.districtId)
+    expect([ofTown('永和區'), ofTown('八里區'), ofTown('烏來區'), ofTown('三峽區'), ofTown('石門區'), ofTown('萬里區'), ofTown('平溪區')])
+      .toEqual(['雙和分區', '新莊分區', '文山分區', '三鶯分區', '淡水分區', '七星分區', '瑞芳分區'])
+    expect(data.areas.filter((a) => a.cityId === 'cityA').length).toBe(29)
     const broken = { ...data, areas: data.areas.map((a) => (a.id === banqiao.id ? { ...a, districtId: 'cityB-d1' } : a)) }
     expect(validateDistrictAreas(broken).length).toBeGreaterThan(0)
   })
