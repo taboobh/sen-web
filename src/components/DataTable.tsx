@@ -1,12 +1,13 @@
-import { useMemo, useState, type Key, type ReactNode } from 'react'
-import { Button, Input, Space, Table, Tooltip, Typography } from 'antd'
+import { useEffect, useMemo, useState, type Key, type ReactNode } from 'react'
+import { Button, Checkbox, Input, Popover, Space, Table, Tooltip, Typography } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import type { SorterResult } from 'antd/es/table/interface'
-import { DownloadOutlined } from '@ant-design/icons'
+import { DownloadOutlined, SettingOutlined } from '@ant-design/icons'
 
 /**
  * SEN-WEB 全站列表規則：凡是列表一律具備「查詢、篩選、排序、匯出 Excel」；
- * 匯出的是「目前畫面上篩選＋查詢＋排序後」的資料，不是全部。
+ * 匯出的是「目前畫面上篩選＋查詢＋排序後」的資料，不是全部；只匯出畫面上顯示的欄位。
+ * 欄位可由「顯示欄位」切換；查詢仍涵蓋隱藏的欄位（例如隱藏全銜仍可用全銜查詢）。
  */
 export interface Col<T> {
   key: string
@@ -24,6 +25,8 @@ export interface Col<T> {
   noExport?: boolean
   width?: number
   fixed?: 'left' | 'right'
+  /** true＝預設不顯示，使用者可從「顯示欄位」打開 */
+  hidden?: boolean
 }
 
 interface Props<T> {
@@ -50,6 +53,7 @@ interface Props<T> {
 
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v))
 const collator = new Intl.Collator('zh-Hant-TW', { numeric: true })
+const LS = (name: string) => `sen-web:cols:${name}`
 const stamp = () => new Date().toISOString().slice(0, 10).replace(/-/g, '')
 
 export default function DataTable<T>(p: Props<T>) {
@@ -57,6 +61,17 @@ export default function DataTable<T>(p: Props<T>) {
   const [q, setQ] = useState('')
   const [filters, setFilters] = useState<Record<string, Key[] | null>>({})
   const [sort, setSort] = useState<{ key: string; order: 'ascend' | 'descend' } | null>(null)
+  const defaultHidden = useMemo(() => columns.filter((c) => c.hidden).map((c) => c.key), [columns])
+  const [hidden, setHidden] = useState<string[]>(() => {
+    try { const v = localStorage.getItem(LS(p.exportName)); if (v) return JSON.parse(v) as string[] } catch { /* 無法使用瀏覽器儲存時用預設 */ }
+    return defaultHidden
+  })
+  useEffect(() => { try { localStorage.setItem(LS(p.exportName), JSON.stringify(hidden)) } catch { /* 忽略 */ } }, [hidden, p.exportName])
+  const shown = columns.filter((c) => !hidden.includes(c.key))
+  const toggleCol = (key: string, on: boolean) => {
+    setHidden((h) => on ? h.filter((k) => k !== key) : [...h, key])
+    if (!on) { setFilters((f) => ({ ...f, [key]: null })); if (sort?.key === key) setSort(null) }
+  }
 
   const view = useMemo(() => {
     const kw = q.trim().toLowerCase()
@@ -79,7 +94,7 @@ export default function DataTable<T>(p: Props<T>) {
     return out
   }, [rows, columns, q, filters, sort])
 
-  const antCols: ColumnsType<T> = columns.map((c) => {
+  const antCols: ColumnsType<T> = shown.map((c) => {
     const distinct = [...new Set(rows.flatMap((r) => c.values ? c.values(r) : [str(c.value(r))]))].filter((v) => v !== '').sort(collator.compare)
     const canFilter = c.filter !== false && !c.noExport && distinct.length > 0
     return {
@@ -99,7 +114,7 @@ export default function DataTable<T>(p: Props<T>) {
   const exportable = p.canExport !== false
 
   const doExport = async () => {
-    const cols = columns.filter((c) => !c.noExport)
+    const cols = shown.filter((c) => !c.noExport)
     const data = view.map((r) => Object.fromEntries(cols.map((c) => [c.title, c.value(r) ?? ''])))
     const XLSX = await import('xlsx')
     const ws = XLSX.utils.json_to_sheet(data, { header: cols.map((c) => c.title) })
@@ -122,6 +137,14 @@ export default function DataTable<T>(p: Props<T>) {
         </Space>
         <Space wrap>
           {p.extra}
+          <Popover trigger="click" placement="bottomRight" title="顯示欄位" content={
+            <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+              {columns.map((c) => <div key={c.key}><Checkbox checked={!hidden.includes(c.key)} disabled={!hidden.includes(c.key) && shown.length <= 1}
+                onChange={(e) => toggleCol(c.key, e.target.checked)}>{c.title}</Checkbox></div>)}
+              <Button size="small" type="link" style={{ padding: 0, marginTop: 4 }} onClick={() => setHidden(defaultHidden)}>恢復預設</Button>
+            </div>}>
+            <Button icon={<SettingOutlined />}>顯示欄位{hidden.length ? `（隱藏 ${hidden.length}）` : ''}</Button>
+          </Popover>
           <Tooltip title={exportable ? (hasCond ? '只匯出目前篩選後的資料' : '') : p.exportTip}>
             <Button icon={<DownloadOutlined />} disabled={!exportable || view.length === 0} onClick={() => { void doExport() }}>匯出 Excel</Button>
           </Tooltip>
@@ -129,7 +152,7 @@ export default function DataTable<T>(p: Props<T>) {
       </Space>
       <Table<T>
         size="small" loading={p.loading} rowKey={rowKey} dataSource={view} columns={antCols}
-        scroll={{ x: p.scrollX ?? 800 }}
+        scroll={{ x: hidden.length ? Math.max(600, shown.reduce((s, c) => s + (c.width ?? 150), 0)) : p.scrollX ?? 800 }}
         expandable={p.expandedRowRender ? { expandedRowRender: p.expandedRowRender } : undefined}
         pagination={p.pagination === false ? false : { pageSize: p.pageSize ?? 10, showSizeChanger: true, hideOnSinglePage: false } as TablePaginationConfig}
         onChange={(_pg, f, s) => {

@@ -144,7 +144,7 @@ export const schoolHandlers = [
     const name = (b.name ?? n.name).trim()
     if (!name) return badRequest('請輸入校名')
     const levels = (b.levels ?? sc.levels).filter((l) => SCHOOL_LEVELS.includes(l))
-    if (!levels.length) return badRequest('請至少選擇一個學制')
+    if (!levels.length) return badRequest('請至少選擇一個教育階段')
     const status = (b.status ?? sc.status) as SchoolStatus
     if (!(status in SCHOOL_STATUS_TEXT)) return badRequest('狀態不正確')
     const c = cnt(n.id)
@@ -196,7 +196,7 @@ export const schoolHandlers = [
     const name = (b.name ?? '').trim()
     if (!name) return badRequest('請輸入校名')
     const levels = (b.levels ?? []).filter((l) => SCHOOL_LEVELS.includes(l)) as SchoolLevel[]
-    if (!levels.length) return badRequest('請至少選擇一個學制')
+    if (!levels.length) return badRequest('請至少選擇一個教育階段')
     if (!db.scopes.some((x) => x.type === 'CITY' && x.cityName === b.city)) return badRequest('請選擇縣市')
     const address = (b.address ?? '').trim()
     const m: MoeSchool = { code, name, ownership: b.ownership ?? '', city: b.city!, zip: (b.zip ?? '').trim(), address, town: townOf(b.city!, address), phone: (b.phone ?? '').trim(), website: (b.website ?? '').trim(), levels }

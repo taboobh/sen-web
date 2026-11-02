@@ -297,3 +297,28 @@ export function parseMoeWorkbook(XLSX: any, data: ArrayBuffer | Uint8Array, file
   const wb = XLSX.read(data, { type: 'array' })
   return parseMoeSheet(sheetRows(XLSX, wb.Sheets[wb.SheetNames[0]]), fileName)
 }
+
+/**
+ * 學校簡稱（列表用）：去掉縣立、市立、國立（含鄉立、鎮立、區立）前綴詞，去掉縣市名稱及鄉鎮市區，
+ * 國民小學→國小、國民中學→國中、高級中學→高中、高級職業學校→高職。私立保留（區分公私立）。
+ * 國民中小學→國中小；去掉鄉鎮後只剩「幼兒園」時保留鄉鎮（臺東縣達仁鄉立幼兒園→達仁鄉立幼兒園）。
+ * 例：花蓮縣鳳林鎮林榮國民小學附設幼兒園→林榮國小附設幼兒園。
+ */
+export function shortSchoolName(name: string, city?: string, town?: string): string {
+  const c = (city ?? '').replace(/^台/, '臺')
+  const cities = c && c !== '海外' ? [c, c.replace(/^臺/, '台')] : []
+  let s = name.trim()
+  const lead = [...cities, ...(town ? [town] : [])]
+  for (let changed = true; changed;) {
+    const before = s
+    const hit = lead.find((x) => s.startsWith(x))
+    if (hit) s = s.slice(hit.length).replace(/^立/, '')       // 臺北市立、達仁鄉立：拆掉地名後剩下的「立」
+    s = s.replace(/^(?:縣|市|國|鄉|鎮|區)立/, '')
+    changed = s !== before
+  }
+  for (const x of cities) s = s.split(x).join('')            // 縣市名稱也可能在中間（例：財團法人…附設臺北市私立…）
+  // 鄉鎮立幼兒園多半只以鄉鎮命名（例：臺東縣達仁鄉立幼兒園），去掉鄉鎮後只剩「幼兒園」無法辨識 → 保留鄉鎮
+  if (town && /^(?:私立)?幼兒園$/.test(s)) s = name.trim().slice(name.trim().indexOf(town))
+  s = s.replace(/國民中小學/g, '國中小').replace(/國民小學/g, '國小').replace(/國民中學/g, '國中').replace(/高級中學/g, '高中').replace(/高級職業學校/g, '高職')
+  return s || name
+}

@@ -6,7 +6,7 @@ import { CloudDownloadOutlined, InboxOutlined } from '@ant-design/icons'
 import DataTable, { type Col } from '../components/DataTable'
 import { api, ApiError } from '../api/client'
 import { SCHOOL_STATUS_TEXT, type SchoolImportRecord, type SchoolInfo, type SchoolStatus } from '../types'
-import { parseMoeWorkbook, SCHOOL_LEVELS, type MoeFile } from '../schools/moe'
+import { parseMoeWorkbook, SCHOOL_LEVELS, shortSchoolName, type MoeFile } from '../schools/moe'
 import { DECISION_TEXT, DIFF_TEXT, type DiffItem, type DiffKind, type ImportDecision, type ImportPreview } from '../schools/schoolData'
 
 type SchoolRow = Omit<SchoolInfo, 'history'> & {
@@ -21,6 +21,11 @@ const CITIES = ['基隆市', '臺北市', '新北市', '桃園市', '新竹市',
 /** 原型內附的教育部統計處 115 學年度名錄（真實檔案，未修改），供夥伴不必自行下載即可走一次年度匯入 */
 const DEMO_115 = ['e1_new.xlsx', 'j1_new.xlsx', 'newcj_new.xlsx', 's2_new.xlsx', 'ac.xlsx', 'aj_new.xlsx', 'high.xlsx', 'high_new.xlsx', 'highA.xlsx', 'highO.xlsx',
   'sp1_new.xlsx', 'school04_new.xls', 'school_exp.xls', '115_BasicChange.xlsx', '115_HighChange.xlsx']
+
+const collator = new Intl.Collator('zh-Hant-TW')
+/** 分區名稱：「臺北市全區」這類全區不必再帶縣市名稱（縣市已有欄位） */
+const districtLabel = (d: string) => d.endsWith('全區') ? '全區' : d
+type Bar = { city?: string; town?: string; level?: string; ownership?: string }
 
 const QUICK: Record<string, (r: SchoolRow) => boolean> = {
   全部: () => true,
@@ -38,6 +43,7 @@ export default function SchoolsView() {
   const [err, setErr] = useState<ApiError | null>(null)
   const [n, setN] = useState(0)
   const [quick, setQuick] = useState('使用中')
+  const [bar, setBar] = useState<Bar>({})
   const [detail, setDetail] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -46,24 +52,34 @@ export default function SchoolsView() {
   if (err) return <Result status="403" title="後端拒絕" subTitle={err.message} />
   if (!data) return <Spin />
 
+  const nameLink = (r: SchoolRow, text: string) => <><a onClick={() => setDetail(r.id)}>{text}</a>{r.branchOf && <Tag color="cyan" style={{ marginLeft: 6 }}>分班</Tag>}</>
   const columns: Col<SchoolRow>[] = [
     { key: 'code', title: '學校代碼', width: 125, value: (r) => r.code, render: (r) => <Typography.Text code>{r.code}</Typography.Text>, filter: false },
-    { key: 'name', title: '學校名稱', width: 240, value: (r) => r.name, filter: false,
-      render: (r) => <><a onClick={() => setDetail(r.id)}>{r.name}</a>{r.branchOf && <Tag color="cyan" style={{ marginLeft: 6 }}>分班</Tag>}</> },
-    { key: 'levels', title: '學制', width: 150, value: (r) => r.levels.join('、'), values: (r) => r.levels },
-    { key: 'ownership', title: '公私立', width: 80, value: (r) => r.ownership },
+    { key: 'levels', title: '教育階段', width: 150, value: (r) => r.levels.join('、'), values: (r) => r.levels },
     { key: 'city', title: '縣市', width: 90, value: (r) => r.city },
-    { key: 'town', title: '鄉鎮市區', width: 100, value: (r) => r.town },
-    { key: 'district', title: '分區', width: 170, value: (r) => r.district,
-      render: (r) => r.district === '未歸分區' ? <Tooltip title="地址無法判斷鄉鎮市區，學校先掛在縣市下"><Tag color="orange">未歸分區</Tag></Tooltip> : r.district === '署轄' ? <Tag color="purple">署轄</Tag> : r.district },
+    { key: 'short', title: '學校簡稱', width: 220, value: (r) => shortSchoolName(r.name, r.city, r.town), filter: false,
+      render: (r) => <Tooltip title={r.name}>{nameLink(r, shortSchoolName(r.name, r.city, r.town))}</Tooltip> },
     { key: 'status', title: '狀態', width: 130, value: (r) => SCHOOL_STATUS_TEXT[r.status], render: (r) => statusTag(r.status) },
-    { key: 'principal', title: '校長', width: 100, value: (r) => r.principal ?? '' },
-    { key: 'contact', title: '發言人（聯絡人）', width: 200, value: (r) => [r.contact?.name, r.contact?.title, r.contact?.phone].filter(Boolean).join(' ') },
+    { key: 'ownership', title: '公私立', width: 80, value: (r) => r.ownership },
+    { key: 'town', title: '鄉鎮市區', width: 100, value: (r) => r.town, hidden: true },
+    { key: 'district', title: '分區', width: 170, value: (r) => districtLabel(r.district), hidden: true,
+      render: (r) => r.district === '未歸分區' ? <Tooltip title="地址無法判斷鄉鎮市區，學校先掛在縣市下"><Tag color="orange">未歸分區</Tag></Tooltip> : r.district === '署轄' ? <Tag color="purple">署轄</Tag> : districtLabel(r.district) },
+    { key: 'name', title: '學校名稱', width: 260, value: (r) => r.name, filter: false, hidden: true, render: (r) => nameLink(r, r.name) },
+    { key: 'principal', title: '校長', width: 100, value: (r) => r.principal ?? '', hidden: true },
+    { key: 'contact', title: '發言人（聯絡人）', width: 200, value: (r) => [r.contact?.name, r.contact?.title, r.contact?.phone].filter(Boolean).join(' '), hidden: true },
     { key: 'address', title: '地址', width: 260, value: (r) => r.address, filter: false },
     { key: 'phone', title: '電話', width: 150, value: (r) => r.phone, filter: false,
       render: (r) => <>{r.phone}{r.phoneBySchool && <Tooltip title="電話已由學校自行維護，名錄匯入不覆寫"><Tag style={{ marginLeft: 4 }}>校</Tag></Tooltip>}</> },
   ]
-  const rows = data.rows.filter(QUICK[quick] ?? QUICK['全部'])
+  // 篩選列（查詢欄位上方）：縣市、鄉鎮市區（隨縣市連動）、教育階段、公私立
+  const opts = (xs: string[]) => [...new Set(xs.filter(Boolean))].sort(collator.compare).map((x) => ({ value: x, label: x }))
+  const cityOpts = opts(data.rows.map((r) => r.city)).sort((a, b) => (CITIES.indexOf(a.value) + 1 || 99) - (CITIES.indexOf(b.value) + 1 || 99))
+  const townOpts = bar.city ? opts(data.rows.filter((r) => r.city === bar.city).map((r) => r.town)) : []
+  const levelOpts = SCHOOL_LEVELS.filter((l) => data.rows.some((r) => r.levels.includes(l))).map((l) => ({ value: l, label: l }))
+  const ownOpts = opts(data.rows.map((r) => r.ownership))
+  const barRows = data.rows.filter((r) => (!bar.city || r.city === bar.city) && (!bar.town || r.town === bar.town)
+    && (!bar.level || r.levels.includes(bar.level as never)) && (!bar.ownership || r.ownership === bar.ownership))
+  const rows = barRows.filter(QUICK[quick] ?? QUICK['全部'])
   const last = data.lastImport
 
   return (
@@ -79,13 +95,22 @@ export default function SchoolsView() {
           <div><b>署管理員</b>可新增學校、修改全部欄位與狀態，並每年匯入統計處名錄；<b>學校</b>只能修改本校的<b>電話、校長、發言人（聯絡人）</b>（學校改過電話後，名錄匯入不再覆寫電話）；縣市、分區僅能瀏覽。大專校院不納入；幼兒園的<b>分班</b>是母園之下的機構，可選為本職機構，母園的學校管理員也可維護；學前（幼兒園、互助教保服務中心）當學年度名錄未公告時，沿用前一學年度資料、不判定廢校。</div>
         </>} />
       <Segmented style={{ marginBottom: 12 }} value={quick} onChange={(v) => setQuick(String(v))}
-        options={Object.keys(QUICK).map((k) => ({ value: k, label: `${k}（${data.rows.filter(QUICK[k]).length}）` }))} />
-      <DataTable<SchoolRow> rows={rows} columns={columns} rowKey={(r) => r.id} exportName="學校基本資料" scrollX={1700} pageSize={20} />
+        options={Object.keys(QUICK).map((k) => ({ value: k, label: `${k}（${barRows.filter(QUICK[k]).length}）` }))} />
+      <Space wrap style={{ display: 'flex', marginBottom: 12 }}>
+        <Select allowClear showSearch placeholder="縣市" style={{ width: 130 }} options={cityOpts} value={bar.city}
+          onChange={(v?: string) => setBar((b) => ({ ...b, city: v, town: undefined }))} />
+        <Select allowClear showSearch placeholder={bar.city ? '鄉鎮市區' : '鄉鎮市區（先選縣市）'} style={{ width: 170 }} options={townOpts} value={bar.town}
+          disabled={!bar.city} onChange={(v?: string) => setBar((b) => ({ ...b, town: v }))} />
+        <Select allowClear placeholder="教育階段" style={{ width: 170 }} options={levelOpts} value={bar.level} onChange={(v?: string) => setBar((b) => ({ ...b, level: v }))} />
+        <Select allowClear placeholder="公私立" style={{ width: 110 }} options={ownOpts} value={bar.ownership} onChange={(v?: string) => setBar((b) => ({ ...b, ownership: v }))} />
+        <Button disabled={!Object.values(bar).some(Boolean)} onClick={() => setBar({})}>清除篩選列</Button>
+      </Space>
+      <DataTable<SchoolRow> rows={rows} columns={columns} rowKey={(r) => r.id} exportName="學校基本資料" scrollX={1965} pageSize={20} />
       {data.canManage && data.imports.length > 0 && (
         <Collapse style={{ marginTop: 16 }} items={[{ key: 'h', label: `名錄匯入紀錄（${data.imports.length}）`, children: (
           <Table<SchoolImportRecord> size="small" rowKey="id" pagination={false} dataSource={data.imports} columns={[
             { title: '時間', dataIndex: 'at' }, { title: '執行者', dataIndex: 'by' }, { title: '學年度', dataIndex: 'year' },
-            { title: '學制', render: (_, r) => r.levels.join('、') },
+            { title: '教育階段', render: (_, r) => r.levels.join('、') },
             { title: '結果', render: (_, r) => Object.entries(r.summary).map(([k, v]) => <Tag key={k}>{(DIFF_TEXT as Record<string, string>)[k] ?? (DECISION_TEXT as Record<string, string>)[k] ?? (k === 'unchanged' ? '無異動' : k)} {v}</Tag>) },
           ]} />) }]} />
       )}
@@ -137,11 +162,11 @@ function SchoolDrawer({ id, onClose, onSaved }: { id: string | null; onClose: ()
                 { label: '學校代碼', children: <>{s.code}{s.oldCodes?.length ? <Typography.Text type="secondary">（舊代碼：{s.oldCodes.join('、')}）</Typography.Text> : null}</> },
                 { label: '校名', children: <>{s.name}{s.oldNames?.length ? <Typography.Text type="secondary">（曾用名：{s.oldNames.join('、')}）</Typography.Text> : null}</> },
                 { label: '狀態', children: <>{statusTag(s.status)}{s.statusSince && <Typography.Text type="secondary">自 {s.statusSince}</Typography.Text>}{s.statusNote && <div>{s.statusNote}</div>}</> },
-                { label: '學制', children: s.levels.join('、') },
-                { label: 'SEN 教育階段', children: s.stages.join('、') || '-' },
+                { label: '教育階段', children: s.levels.join('、') },
+                { label: 'SEN 階段歸類', children: s.stages.join('、') || '-' },
                 { label: '公私立', children: s.ownership || '-' },
                 { label: '縣市／鄉鎮市區', children: `${s.city} ${s.town || '（無法由地址判斷）'}` },
-                { label: '分區', children: s.district },
+                { label: '分區', children: districtLabel(s.district) },
                 { label: '地址', children: `${s.zip ? `[${s.zip}]` : ''}${s.address}` },
                 { label: '電話', children: <>{s.phone || '-'}{s.phoneBySchool && <Typography.Text type="secondary">（學校自行維護，名錄匯入不覆寫）</Typography.Text>}</> },
                 { label: '校長', children: s.principal || '-' },
@@ -175,7 +200,7 @@ function SchoolDrawer({ id, onClose, onSaved }: { id: string | null; onClose: ()
               <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="名錄欄位以統計處名錄為準，下次年度匯入時會依名錄覆寫；手動修正只用於名錄有誤或尚未公告的情況。電話、校長、發言人請在「基本資料」頁修改。" />
               <Form form={moe} layout="vertical">
                 <Form.Item name="name" label="校名" rules={[{ required: true, whitespace: true, message: '請輸入校名' }]}><Input /></Form.Item>
-                <Form.Item name="levels" label="學制" rules={[{ required: true, message: '請選擇學制' }]}><Select mode="multiple" options={SCHOOL_LEVELS.map((l) => ({ value: l, label: l }))} /></Form.Item>
+                <Form.Item name="levels" label="教育階段" rules={[{ required: true, message: '請選擇教育階段' }]}><Select mode="multiple" options={SCHOOL_LEVELS.map((l) => ({ value: l, label: l }))} /></Form.Item>
                 <Space wrap align="start">
                   <Form.Item name="ownership" label="公私立"><Select style={{ width: 100 }} options={['公立', '私立'].map((x) => ({ value: x, label: x }))} /></Form.Item>
                   <Form.Item name="city" label="縣市"><Select style={{ width: 120 }} options={CITIES.map((x) => ({ value: x, label: x }))} /></Form.Item>
@@ -270,7 +295,7 @@ function ImportModal({ open, lastYear, onClose, onDone }: { open: boolean; lastY
         {step === 0 && (
           <>
             <Typography.Paragraph type="secondary">
-              到統計處「各級學校名錄及異動一覽表」下載當學年度的檔案（xlsx／xls／ods），可一次選多個。系統依檔案標題自動辨識學制；新設校／籌備處名單與異動一覽表會用來判斷改制換代碼、停招與停辦。大專校院檔案會略過。
+              到統計處「各級學校名錄及異動一覽表」下載當學年度的檔案（xlsx／xls／ods），可一次選多個。系統依檔案標題自動辨識教育階段；新設校／籌備處名單與異動一覽表會用來判斷改制換代碼、停招與停辦。大專校院檔案會略過。
             </Typography.Paragraph>
             <Upload.Dragger multiple accept=".xlsx,.xls,.ods,.csv" showUploadList={false}
               beforeUpload={(f, list) => { if (f === list[list.length - 1]) { setBusy('解析中…'); void Promise.all(list.map(async (x) => ({ name: x.name, buf: await x.arrayBuffer() }))).then(addBuffers).finally(() => setBusy(null)) } return false }}>
@@ -303,7 +328,7 @@ function ImportModal({ open, lastYear, onClose, onDone }: { open: boolean; lastY
             <Descriptions size="small" bordered column={2} style={{ marginBottom: 12 }} items={[
               { label: '名錄學年度', children: pv.year ?? '無法判斷' },
               { label: '名錄學校數', children: `${pv.total} 校（無異動 ${pv.unchanged} 校）` },
-              { label: '本次提供的學制', children: pv.levels.join('、') },
+              { label: '本次提供的教育階段', children: pv.levels.join('、') },
               { label: '沿用前一學年度', children: pv.carriedLevels.length ? <>{pv.carriedLevels.join('、')}<Typography.Text type="secondary">（未提供名錄，不判定廢校）</Typography.Text></> : '無' },
             ]} />
             <Space wrap style={{ marginBottom: 12 }}>
@@ -357,7 +382,7 @@ function AddSchoolModal({ open, onClose, onDone }: { open: boolean; onClose: () 
           <Form.Item name="status" label="狀態"><Select style={{ width: 160 }} options={[{ value: 'preparing', label: '未啟用（籌備處）' }, { value: 'active', label: '使用中' }]} /></Form.Item>
         </Space>
         <Form.Item name="name" label="校名" rules={[{ required: true, whitespace: true, message: '請輸入校名' }]}><Input /></Form.Item>
-        <Form.Item name="levels" label="學制" rules={[{ required: true, message: '請選擇學制' }]}><Select mode="multiple" options={SCHOOL_LEVELS.map((l) => ({ value: l, label: l }))} /></Form.Item>
+        <Form.Item name="levels" label="教育階段" rules={[{ required: true, message: '請選擇教育階段' }]}><Select mode="multiple" options={SCHOOL_LEVELS.map((l) => ({ value: l, label: l }))} /></Form.Item>
         <Space wrap align="start">
           <Form.Item name="ownership" label="公私立"><Select style={{ width: 100 }} options={['公立', '私立'].map((x) => ({ value: x, label: x }))} /></Form.Item>
           <Form.Item name="city" label="縣市" rules={[{ required: true, message: '請選擇縣市' }]}><Select style={{ width: 120 }} options={CITIES.map((x) => ({ value: x, label: x }))} /></Form.Item>

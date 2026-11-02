@@ -133,7 +133,7 @@ export function syncBranches(data: RbacData, main: ScopeNode, ctx: ChangeCtx): s
 
 /** 名錄欄位（匯入時以名錄為準覆寫）；在地欄位（特教窗口、備註）不受匯入影響 */
 export const MOE_FIELDS: { key: keyof SchoolInfo | 'name'; label: string }[] = [
-  { key: 'name', label: '校名' }, { key: 'levels', label: '學制' }, { key: 'ownership', label: '公私立' }, { key: 'city', label: '縣市' },
+  { key: 'name', label: '校名' }, { key: 'levels', label: '教育階段' }, { key: 'ownership', label: '公私立' }, { key: 'city', label: '縣市' },
   { key: 'town', label: '鄉鎮市區' }, { key: 'zip', label: '郵遞區號' }, { key: 'address', label: '地址' }, { key: 'phone', label: '電話' }, { key: 'website', label: '網址' }, { key: 'branches', label: '分班' },
 ]
 const show = (v: unknown) => Array.isArray(v)

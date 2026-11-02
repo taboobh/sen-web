@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as XLSX from 'xlsx'
 import { readdirSync, readFileSync } from 'node:fs'
 import { createRbacData } from '../mock/data'
-import { mergeMoe, parseMoeWorkbook, townOf, normCode } from './moe'
+import { mergeMoe, parseMoeWorkbook, townOf, normCode, shortSchoolName } from './moe'
 import { applyImport, previewImport, syncBranches } from './schoolData'
 import { orgSelectable, scopeContains, syncSsoAffiliation, validateDistrictAreas } from '../auth/engine'
 
@@ -182,4 +182,21 @@ describe('114 → 115 學年度年度匯入', () => {
     const preIds = new Set(data.scopes.filter((x) => x.school?.levels.includes('幼兒園')).map((x) => x.school!.code))
     expect(pv.items.filter((i) => i.kind === 'missing' && preIds.has(i.code))).toEqual([])
   })
+})
+
+describe('學校簡稱', () => {
+  it.each([
+    ['市立板橋國小', '新北市', '板橋區', '板橋國小'],
+    ['國立華僑高級中等學校', '新北市', '板橋區', '華僑高級中等學校'],
+    ['臺東縣達仁鄉立幼兒園', '臺東縣', '達仁鄉', '達仁鄉立幼兒園'],
+    ['新北市立烏來國民中小學附設幼兒園', '新北市', '烏來區', '烏來國中小附設幼兒園'],
+    ['花蓮縣鳳林鎮林榮國民小學附設幼兒園', '花蓮縣', '鳳林鎮', '林榮國小附設幼兒園'],
+    ['嘉義市西區博愛國民小學附設幼兒園', '嘉義市', '西區', '博愛國小附設幼兒園'],
+    ['新北市私立愛霖幼兒園', '新北市', '林口區', '私立愛霖幼兒園'],
+    ['臺北市立中正高級中學', '臺北市', '中正區', '中正高中'],
+    ['桃園市立大園國際高級中學', '桃園市', '大園區', '大園國際高中'],
+    ['國立臺南高級職業學校', '臺南市', '南區', '臺南高職'],
+    ['財團法人台北市中華基督教景美浸信會附設臺北市私立聖愛幼兒園', '臺北市', '文山區', '財團法人中華基督教景美浸信會附設私立聖愛幼兒園'],
+    ['縣立民和國民中學', '南投縣', '水里鄉', '民和國中'],
+  ])('%s → %s', (name, city, town, want) => { expect(shortSchoolName(name, city, town)).toBe(want) })
 })
